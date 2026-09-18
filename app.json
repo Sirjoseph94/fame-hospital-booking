@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "FAME Hospital Booking",
+    "slug": "fame-hospital-bookings",
+    "version": "1.0.0",
+    "scheme": "fame-hospital",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourhospital.bookingapp"
+    },
+    "android": {
+      "package": "com.yourhospital.bookingapp",
+      "permissions": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-router",
+      "expo-secure-store",
+      "expo-calendar",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#ffffff",
+          "sounds": []
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "56329a97-4f48-4c32-8854-2ca46c744dba"
+      }
+    },
+    "owner": "lazpet"
+  }
+}

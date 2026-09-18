@@ -1,0 +1,103 @@
+-- =========================================================
+-- Pilot seed templates (OPTIONAL — not run automatically)
+-- =========================================================
+-- Use after migrations in docs/RUNBOOK.md.
+-- Replace ALL placeholder UUIDs and dates before uncommenting.
+-- Run manually in Supabase SQL Editor.
+-- =========================================================
+
+-- -----------------------------------------------------------------
+-- 1. First admin (after the user exists in auth.users)
+-- -----------------------------------------------------------------
+-- Sign up in the app, copy user id from Authentication → Users, then:
+--
+-- update public.profiles
+-- set role = 'admin', is_active = true
+-- where id = '00000000-0000-0000-0000-000000000000';
+
+-- -----------------------------------------------------------------
+-- 2. Example doctor profile + doctors row
+-- -----------------------------------------------------------------
+-- Prerequisite: auth user created (sign-up or dashboard). Then:
+--
+-- update public.profiles
+-- set role = 'doctor', full_name = 'Dr. Ada Pilot', is_active = true
+-- where id = '11111111-1111-1111-1111-111111111111';
+--
+-- insert into public.doctors (
+--   id,
+--   specialty,
+--   department,
+--   bio,
+--   consultation_fee,
+--   years_experience,
+--   is_accepting_bookings,
+--   is_active
+-- ) values (
+--   '11111111-1111-1111-1111-111111111111',
+--   'General Practice',
+--   'Outpatients',
+--   'Pilot roster doctor for smoke tests.',
+--   50.00,
+--   8,
+--   true,
+--   true
+-- )
+-- on conflict (id) do update set
+--   specialty = excluded.specialty,
+--   is_accepting_bookings = true,
+--   is_active = true;
+
+-- -----------------------------------------------------------------
+-- 3. Example appointment_slots (future dates required)
+-- -----------------------------------------------------------------
+-- Replace doctor_id and pick dates/times in the future (local hospital TZ).
+--
+-- insert into public.appointment_slots (
+--   doctor_id,
+--   slot_date,
+--   start_time,
+--   end_time,
+--   status
+-- ) values
+--   (
+--     '11111111-1111-1111-1111-111111111111',
+--     (current_date + interval '1 day')::date,
+--     '09:00',
+--     '09:30',
+--     'available'
+--   ),
+--   (
+--     '11111111-1111-1111-1111-111111111111',
+--     (current_date + interval '1 day')::date,
+--     '09:30',
+--     '10:00',
+--     'available'
+--   );
+
+-- -----------------------------------------------------------------
+-- 4. Example doctor_invites row (admin creates; Phase 1 adds UI)
+-- -----------------------------------------------------------------
+-- Requires an admin profile id for created_by. Code is uppercase-friendly.
+--
+-- insert into public.doctor_invites (
+--   code,
+--   email,
+--   specialty,
+--   bio,
+--   consultation_fee,
+--   years_experience,
+--   status,
+--   expires_at,
+--   created_by
+-- ) values (
+--   'PILOT001',
+--   'doctor.example@hospital.test',
+--   'Cardiology',
+--   'Invite for pilot claim flow (Phase 1 UI).',
+--   75.00,
+--   12,
+--   'pending',
+--   now() + interval '7 days',
+--   '00000000-0000-0000-0000-000000000000'
+-- );
