@@ -25,6 +25,7 @@
       "bundler": "metro"
     },
     "plugins": [
+      "expo-dev-client",
       "expo-status-bar",
       "expo-router",
       "expo-secure-store",
