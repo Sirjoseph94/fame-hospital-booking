@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   AccessibilityInfo,
-  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -10,6 +9,7 @@ import {
 } from "react-native";
 import * as Linking from "expo-linking";
 import { isPast, parseISO } from "date-fns";
+import { useFocusEffect } from "expo-router";
 
 import { RescheduleSheet } from "@/components/patient/reschedule-sheet";
 import { VisitCard } from "@/components/ui/visit-card";
@@ -21,6 +21,8 @@ import {
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
 import { ShellHeader } from "@/components/shell-header";
+import { confirmAsync, showAlert } from "@/lib/confirm";
+import { useNow } from "@/lib/hooks/use-now";
 import { telehealthJoinState } from "@/lib/telehealth-join";
 import { useSessionStore } from "@/lib/stores/session";
 import { useVisitStatusSnapshot } from "@/lib/stores/visit-status-snapshot";
@@ -46,7 +48,7 @@ interface EnrichedVisit extends Appointment {
 }
 
 export default function PatientVisitsScreen() {
-  const session = useSessionStore((state) => state.session);
+  const userId = useSessionStore((state) => state.session?.userId);
   const mergeStatuses = useVisitStatusSnapshot((state) => state.mergeStatuses);
   const [activeTab, setActiveTab] = useState<VisitsTab>("upcoming");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -61,22 +63,18 @@ export default function PatientVisitsScreen() {
     null,
   );
   const [cancelBanner, setCancelBanner] = useState<string | null>(null);
-  const [, setJoinTick] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => setJoinTick((value) => value + 1), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  // Re-render every minute so telehealth join windows stay current.
+  useNow(60_000);
 
   const load = useCallback(async () => {
-    if (!session) {
+    if (!userId) {
       return;
     }
     setError(null);
     try {
       const [appointmentRows, beneficiaryRows, doctorRows] = await Promise.all([
-        schedulingService.listAppointments(session.userId),
-        schedulingService.listBeneficiaries(session.userId),
+        schedulingService.listAppointments(userId),
+        schedulingService.listBeneficiaries(userId),
         schedulingService.listDoctors(),
       ]);
       const snapshot: Record<string, Appointment["dbStatus"]> = {};
@@ -105,12 +103,15 @@ export default function PatientVisitsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [mergeStatuses, session]);
+  }, [mergeStatuses, userId]);
 
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  // Runs on first focus and every time the tab regains focus (e.g. after booking).
+  useFocusEffect(
+    useCallback(() => {
+      const task = setTimeout(() => void load(), 0);
+      return () => clearTimeout(task);
+    }, [load]),
+  );
 
   const enriched = useMemo((): EnrichedVisit[] => {
     return appointments.flatMap((appointment) => {
@@ -161,42 +162,35 @@ export default function PatientVisitsScreen() {
     );
   }, [activeTab, enriched]);
 
-  const cancelVisit = (visit: EnrichedVisit) => {
-    Alert.alert(
-      "Cancel appointment?",
-      "This will release the time slot for other patients.",
-      [
-        { text: "Keep appointment", style: "cancel" },
-        {
-          text: "Cancel appointment",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              try {
-                await schedulingService.cancelAppointment(visit.id);
-                setCancelBanner("Appointment cancelled.");
-                AccessibilityInfo.announceForAccessibility(
-                  "Appointment cancelled.",
-                );
-                await load();
-              } catch (cause) {
-                const message =
-                  cause instanceof SchedulingError
-                    ? cause.message
-                    : "Could not cancel the appointment.";
-                Alert.alert("Cancel failed", message);
-              }
-            })();
-          },
-        },
-      ],
-    );
+  const cancelVisit = async (visit: EnrichedVisit) => {
+    const confirmed = await confirmAsync({
+      title: "Cancel appointment?",
+      message: "This will release the time slot for other patients.",
+      confirmText: "Cancel appointment",
+      cancelText: "Keep appointment",
+      destructive: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await schedulingService.cancelAppointment(visit.id);
+      setCancelBanner("Appointment cancelled.");
+      AccessibilityInfo.announceForAccessibility("Appointment cancelled.");
+      await load();
+    } catch (cause) {
+      const message =
+        cause instanceof SchedulingError
+          ? cause.message
+          : "Could not cancel the appointment.";
+      showAlert("Cancel failed", message);
+    }
   };
 
   const joinTelehealth = (visit: EnrichedVisit) => {
     const url = visit.videoUrl;
     if (!url) {
-      Alert.alert(
+      showAlert(
         "Join unavailable",
         "This telehealth link is not ready yet. Contact the hospital if you need help.",
       );
@@ -329,7 +323,7 @@ export default function PatientVisitsScreen() {
                         accessibilityLabel={`Cancel visit with ${visit.doctorName}`}
                         accessibilityRole="button"
                         className="min-h-12 flex-1 items-center justify-center rounded-xl border border-ink-muted bg-surface px-3 web:hover:opacity-90"
-                        onPress={() => cancelVisit(visit)}
+                        onPress={() => void cancelVisit(visit)}
                       >
                         <Text className="font-semibold text-ink">Cancel</Text>
                       </Pressable>

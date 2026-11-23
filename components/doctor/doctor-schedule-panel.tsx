@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -95,10 +95,18 @@ export function DoctorSchedulePanel({
     reset((values) => ({ ...values, slotDate: dayYmd }));
   }, [dayYmd, reset]);
 
+  // Monotonic request id: responses for a day the user has already navigated
+  // away from are ignored, so a slow earlier request can't overwrite the
+  // current day's slots.
+  const requestIdRef = useRef(0);
+
   const load = useCallback(async () => {
     if (!doctorId) {
       return;
     }
+
+    const requestId = ++requestIdRef.current;
+    const isStale = () => requestId !== requestIdRef.current;
 
     setError(null);
     try {
@@ -106,18 +114,26 @@ export function DoctorSchedulePanel({
         schedulingService.listScheduleSlotsOnDate(doctorId, dayYmd),
         schedulingService.listDoctors(),
       ]);
+      if (isStale()) {
+        return;
+      }
       setSlots(slotRows);
       const doctor = doctors.find((row) => row.id === doctorId);
       setAcceptingBookings(doctor?.isAcceptingBookings ?? true);
     } catch (cause) {
+      if (isStale()) {
+        return;
+      }
       setError(
         cause instanceof SchedulingError
           ? cause.message
           : "Could not load schedule.",
       );
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!isStale()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [dayYmd, doctorId]);
 

@@ -16,6 +16,9 @@ create table if not exists public.profiles (
 );
 
 -- Automatically create a profile row whenever a new auth user signs up.
+-- Role is ALWAYS 'patient': user metadata is client-controlled and must never
+-- decide privileges. Doctors are promoted via claim_doctor_invite; admins
+-- manually (see docs/RUNBOOK.md §3).
 create or replace function public.handle_new_user()
 returns trigger as $$
 begin
@@ -23,11 +26,11 @@ begin
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'full_name', 'New User'),
-    coalesce(new.raw_user_meta_data->>'role', 'patient')
+    'patient'
   );
   return new;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql security definer set search_path = public;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created

@@ -244,9 +244,7 @@ export default function BookConfirmationScreen() {
           onPress={() => void confirm()}
         >
           {submitting ? (
-            <View className="text-surface">
-              <ActivityIndicator color="currentColor" />
-            </View>
+            <ActivityIndicator color="#FFFFFF" />
           ) : (
             <Text className="text-base font-semibold text-surface">Confirm</Text>
           )}

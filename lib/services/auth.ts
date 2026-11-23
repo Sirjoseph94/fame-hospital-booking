@@ -149,8 +149,8 @@ export const authService: AuthService = {
       password,
       options: {
         data: {
+          // Role is assigned server-side (always "patient" on sign-up).
           full_name: displayName,
-          role: "patient",
           dob,
           gender,
         },

@@ -50,14 +50,16 @@ export default function DoctorBlackoutScreen() {
     },
   });
 
+  const userId = session?.userId;
+
   const load = useCallback(async () => {
-    if (!session) {
+    if (!userId) {
       return;
     }
 
     setError(null);
     try {
-      const rows = await schedulingService.listBlackouts(session.userId);
+      const rows = await schedulingService.listBlackouts(userId);
       setBlackouts(rows);
     } catch (cause) {
       setError(
@@ -69,7 +71,7 @@ export default function DoctorBlackoutScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [session]);
+  }, [userId]);
 
   useEffect(() => {
     const task = setTimeout(() => void load(), 0);

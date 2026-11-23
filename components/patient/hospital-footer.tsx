@@ -16,7 +16,7 @@ export function HospitalFooter() {
           accessibilityLabel={`Call ${hospitalInfo.phone}`}
           accessibilityRole="link"
           className="min-h-12 justify-center web:hover:opacity-80"
-          onPress={() => void Linking.openURL(`tel:${hospitalInfo.phone.replace(/\D/g, "")}`)}
+          onPress={() => void Linking.openURL(`tel:${hospitalInfo.phone.replace(/[^\d+]/g, "")}`)}
         >
           <Text className="text-base font-medium text-primary" selectable>
             {hospitalInfo.phone}

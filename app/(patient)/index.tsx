@@ -1,13 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
-  Alert,
   Pressable,
   ScrollView,
   Text,
   View,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import * as Linking from "expo-linking";
 
 import { AddBeneficiarySheet } from "@/components/patient/add-beneficiary-sheet";
@@ -24,6 +23,8 @@ import {
 import { Sheet } from "@/components/ui/sheet";
 import { VisitCard } from "@/components/ui/visit-card";
 import { ShellHeader } from "@/components/shell-header";
+import { confirmAsync } from "@/lib/confirm";
+import { useNow } from "@/lib/hooks/use-now";
 import { useBreakpoint } from "@/lib/platform";
 import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
@@ -50,6 +51,7 @@ import type {
 
 export default function PatientHomeScreen() {
   const session = useSessionStore((state) => state.session);
+  const userId = session?.userId;
   const breakpoint = useBreakpoint();
 
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
@@ -80,42 +82,41 @@ export default function PatientHomeScreen() {
     room?: string;
     address?: string;
   } | null>(null);
-  const [, setJoinTick] = useState(0);
   const [returningLine, setReturningLine] = useState<{
     doctorName: string;
     appointmentType: AppointmentType;
   } | null>(null);
 
-  useEffect(() => {
-    const timer = setInterval(() => setJoinTick((value) => value + 1), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  const [startingBooking, setStartingBooking] = useState(false);
+  const hasLoadedRef = useRef(false);
+  const startingBookingRef = useRef(false);
+
+  // Re-render every minute so telehealth join windows stay current.
+  useNow(60_000);
 
   const beginReturningFlow = useBookingStore((state) => state.beginReturningFlow);
   const beginStandardFlow = useBookingStore((state) => state.beginStandardFlow);
 
-  const load = useCallback(async () => {
-    if (!session) {
+  const load = useCallback(async (options?: { silent?: boolean }) => {
+    if (!userId) {
       return;
     }
     setError(null);
-    setLoading(true);
+    if (!options?.silent) {
+      setLoading(true);
+    }
     try {
       const [initialBeneficiaries, doctorRows, appointmentRows] =
         await Promise.all([
-          schedulingService.listBeneficiaries(session.userId),
+          schedulingService.listBeneficiaries(userId),
           schedulingService.listDoctors(),
-          schedulingService.listAppointments(session.userId),
+          schedulingService.listAppointments(userId),
         ]);
       let beneficiaryRows = initialBeneficiaries;
       if (!pickSelfBeneficiary(beneficiaryRows)) {
-        const ensured = await schedulingService.ensureSelfBeneficiary(
-          session.userId,
-        );
+        const ensured = await schedulingService.ensureSelfBeneficiary(userId);
         if (ensured) {
-          beneficiaryRows = await schedulingService.listBeneficiaries(
-            session.userId,
-          );
+          beneficiaryRows = await schedulingService.listBeneficiaries(userId);
         }
       }
       setBeneficiaries(beneficiaryRows);
@@ -159,14 +160,22 @@ export default function PatientHomeScreen() {
           : "Could not load your home screen.";
       setError(message);
     } finally {
+      hasLoadedRef.current = true;
       setLoading(false);
     }
-  }, [session]);
+  }, [userId]);
 
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  // Runs on first focus and silently refreshes whenever Home regains focus
+  // (e.g. returning from the booking flow), so the upcoming card isn't stale.
+  useFocusEffect(
+    useCallback(() => {
+      const task = setTimeout(
+        () => void load({ silent: hasLoadedRef.current }),
+        0,
+      );
+      return () => clearTimeout(task);
+    }, [load]),
+  );
 
   useEffect(() => {
     if (!preferredBeneficiaryId || beneficiaries.length === 0) {
@@ -195,6 +204,9 @@ export default function PatientHomeScreen() {
   }, [beneficiaries, preferredBeneficiaryId, selfBeneficiary]);
 
   const handleBookAppointment = async () => {
+    if (startingBookingRef.current) {
+      return;
+    }
     if (!session || !bookingBeneficiary) {
       AccessibilityInfo.announceForAccessibility(
         "Set up booking for yourself before continuing.",
@@ -203,7 +215,20 @@ export default function PatientHomeScreen() {
       return;
     }
 
-    const appointments = await schedulingService.listAppointments(session.userId);
+    startingBookingRef.current = true;
+    setStartingBooking(true);
+    let appointments: Awaited<
+      ReturnType<typeof schedulingService.listAppointments>
+    >;
+    try {
+      appointments = await schedulingService.listAppointments(session.userId);
+    } catch {
+      // Fall back to the standard flow if history can't be loaded.
+      appointments = [];
+    } finally {
+      startingBookingRef.current = false;
+      setStartingBooking(false);
+    }
     const last = lastBookedDoctorId(appointments);
     const self = selfBeneficiary;
 
@@ -286,30 +311,24 @@ export default function PatientHomeScreen() {
       });
       setBeneficiaries((rows) => [...rows, created]);
       setAddPatientOpen(false);
-      Alert.alert(
-        `Added ${created.displayName}`,
-        "Book an appointment for them now, or add them to your list only?",
-        [
-          {
-            text: "Add only",
-            style: "cancel",
-            onPress: () => {
-              AccessibilityInfo.announceForAccessibility("Patient added.");
-            },
-          },
-          {
-            text: "Book now",
-            onPress: () => {
-              setPreferredBeneficiaryId(created.id);
-              beginStandardFlow(created.id);
-              AccessibilityInfo.announceForAccessibility(
-                `Ready to book for ${created.displayName}.`,
-              );
-              router.push("/book/doctor");
-            },
-          },
-        ],
-      );
+      void confirmAsync({
+        title: `Added ${created.displayName}`,
+        message:
+          "Book an appointment for them now, or add them to your list only?",
+        confirmText: "Book now",
+        cancelText: "Add only",
+      }).then((bookNow) => {
+        if (!bookNow) {
+          AccessibilityInfo.announceForAccessibility("Patient added.");
+          return;
+        }
+        setPreferredBeneficiaryId(created.id);
+        beginStandardFlow(created.id);
+        AccessibilityInfo.announceForAccessibility(
+          `Ready to book for ${created.displayName}.`,
+        );
+        router.push("/book/doctor");
+      });
     } catch (cause) {
       setAddPatientError(
         cause instanceof Error ? cause.message : "Could not save patient.",
@@ -432,7 +451,9 @@ export default function PatientHomeScreen() {
               <Pressable
                 accessibilityLabel="Book Appointment"
                 accessibilityRole="button"
+                accessibilityState={{ busy: startingBooking }}
                 className="min-h-12 items-center justify-center rounded-xl bg-primary px-4 web:hover:opacity-90"
+                disabled={startingBooking}
                 onPress={() => void handleBookAppointment()}
               >
                 <Text className="text-base font-semibold text-surface">

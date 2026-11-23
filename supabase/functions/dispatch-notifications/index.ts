@@ -8,9 +8,9 @@ import {
 } from "../_shared/templates.ts";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  // Server-to-server only (Database Webhook); no browser origins allowed.
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
+    "authorization, x-client-info, apikey, content-type, x-webhook-secret",
 };
 
 interface DeliveryRow {
@@ -26,6 +26,18 @@ interface WebhookPayload {
   type?: string;
   record?: DeliveryRow;
   delivery_id?: string;
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  let diff = ab.length ^ bb.length;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i += 1) {
+    diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  }
+  return diff === 0;
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -190,30 +202,47 @@ async function processDelivery(
   supabase: ReturnType<typeof createClient>,
   deliveryId: string,
 ): Promise<{ id: string; status: string }> {
-  const { data: delivery, error: loadError } = await supabase
+  // Atomically claim the row: only one invocation (webhook retry, manual
+  // replay, concurrent call) can move it from pending → processing.
+  const { data: claimed, error: claimError } = await supabase
     .from("notification_deliveries")
-    .select("*")
+    .update({ status: "processing" })
     .eq("id", deliveryId)
+    .eq("status", "pending")
+    .select("*")
     .maybeSingle();
 
-  if (loadError || !delivery) {
-    throw new Error(loadError?.message ?? "Delivery not found.");
+  if (claimError) {
+    throw new Error(claimError.message);
   }
 
-  const row = delivery as DeliveryRow;
-  if (row.status !== "pending") {
-    return { id: row.id, status: row.status };
+  if (!claimed) {
+    const { data: existing } = await supabase
+      .from("notification_deliveries")
+      .select("id, status")
+      .eq("id", deliveryId)
+      .maybeSingle();
+    if (!existing) {
+      throw new Error("Delivery not found.");
+    }
+    return { id: existing.id as string, status: existing.status as string };
   }
+
+  const row = claimed as DeliveryRow & { attempts?: number };
 
   const mark = async (status: "sent" | "skipped" | "failed", error?: string) => {
-    await supabase
+    const { error: markError } = await supabase
       .from("notification_deliveries")
       .update({
         status,
         error: error ?? null,
+        attempts: (row.attempts ?? 0) + 1,
         processed_at: new Date().toISOString(),
       })
       .eq("id", row.id);
+    if (markError) {
+      console.error(`Failed to mark delivery ${row.id} as ${status}`, markError);
+    }
     return { id: row.id, status };
   };
 
@@ -303,6 +332,20 @@ async function processDelivery(
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
+
+  // Only the Database Webhook (or an operator) may invoke this function.
+  // Fails closed when the secret is not configured.
+  const expectedSecret = Deno.env.get("NOTIFICATION_WEBHOOK_SECRET");
+  if (!expectedSecret) {
+    return jsonResponse({ error: "webhook secret not configured" }, 500);
+  }
+  if (!timingSafeEqual(req.headers.get("x-webhook-secret") ?? "", expectedSecret)) {
+    return jsonResponse({ error: "unauthorized" }, 401);
+  }
+
+  if (req.method !== "POST") {
+    return jsonResponse({ error: "method not allowed" }, 405);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;

@@ -56,13 +56,15 @@ export default function DoctorProfileScreen() {
 
   const phoneValue = useWatch({ control, name: "phone" });
 
+  const userId = session?.userId;
+
   const load = useCallback(async () => {
-    if (!session) {
+    if (!userId) {
       return;
     }
     setError(null);
     try {
-      const profile = await profileService.getDoctorProfile(session.userId);
+      const profile = await profileService.getDoctorProfile(userId);
       setEmail(profile.email);
       setDepartment(profile.department);
       reset({
@@ -72,7 +74,7 @@ export default function DoctorProfileScreen() {
         bio: profile.bio ?? "",
         yearsExperience: String(profile.yearsExperience),
         consultationFee: String(profile.consultationFee),
-      });
+      }, { keepDirtyValues: true }); // don't wipe unsaved edits on refresh
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Could not load your profile.",
@@ -81,7 +83,7 @@ export default function DoctorProfileScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [reset, session]);
+  }, [reset, userId]);
 
   useEffect(() => {
     const task = setTimeout(() => void load(), 0);

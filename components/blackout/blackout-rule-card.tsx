@@ -1,13 +1,13 @@
 import { useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   Text,
 } from "react-native";
 import { format, isFuture, parseISO } from "date-fns";
 
 import { Card } from "@/components/ui/card";
+import { confirmAsync, showAlert } from "@/lib/confirm";
 import {
   SchedulingError,
   schedulingService,
@@ -32,35 +32,31 @@ export function BlackoutRuleCard({
   const [deleting, setDeleting] = useState(false);
   const canDelete = isFuture(parseISO(rule.endsAt));
 
-  const confirmDelete = () => {
-    Alert.alert(
-      "Remove blackout?",
-      "Overlapping slots that are still blocked only by this window will become available again.",
-      [
-        { text: "Keep", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              setDeleting(true);
-              try {
-                await schedulingService.deleteBlackout(rule.id);
-                onDeleted();
-              } catch (cause) {
-                const message =
-                  cause instanceof SchedulingError
-                    ? cause.message
-                    : "Could not remove blackout.";
-                Alert.alert("Remove failed", message);
-              } finally {
-                setDeleting(false);
-              }
-            })();
-          },
-        },
-      ],
-    );
+  const confirmDelete = async () => {
+    const confirmed = await confirmAsync({
+      title: "Remove blackout?",
+      message:
+        "Overlapping slots that are still blocked only by this window will become available again.",
+      confirmText: "Remove",
+      cancelText: "Keep",
+      destructive: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await schedulingService.deleteBlackout(rule.id);
+      onDeleted();
+    } catch (cause) {
+      const message =
+        cause instanceof SchedulingError
+          ? cause.message
+          : "Could not remove blackout.";
+      showAlert("Remove failed", message);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -79,7 +75,7 @@ export function BlackoutRuleCard({
           accessibilityState={{ disabled: deleting, busy: deleting }}
           className="min-h-11 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
           disabled={deleting}
-          onPress={confirmDelete}
+          onPress={() => void confirmDelete()}
         >
           {deleting ? (
             <ActivityIndicator />

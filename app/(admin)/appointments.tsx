@@ -18,6 +18,7 @@ import {
   ScreenLoadingSkeleton,
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
+import { useNow } from "@/lib/hooks/use-now";
 import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
   SchedulingError,
@@ -70,12 +71,8 @@ export default function AdminAppointmentsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [, setJoinTick] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => setJoinTick((value) => value + 1), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  // Re-render every minute so telehealth join windows stay current.
+  useNow(60_000);
 
   const load = useCallback(async () => {
     setError(null);

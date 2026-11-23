@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Pressable, Text, View } from "react-native";
 import { LogOut } from "lucide-react-native";
 import { router } from "expo-router";
@@ -18,20 +19,37 @@ export function ShellHeader({ title }: ShellHeaderProps) {
   );
   const setSession = useSessionStore((state) => state.setSession);
 
+  const signingOutRef = useRef(false);
+
   const handleSignOut = async () => {
-    const { slotId, hold, resetBookingDraft } = useBookingStore.getState();
-    if (slotId && hold) {
+    if (signingOutRef.current) {
+      return;
+    }
+    signingOutRef.current = true;
+    try {
+      const { slotId, hold, resetBookingDraft } = useBookingStore.getState();
+      if (slotId && hold) {
+        try {
+          await schedulingService.releaseHold(slotId);
+        } catch {
+          // Best-effort before clearing local session.
+        }
+      }
+      resetBookingDraft();
       try {
-        await schedulingService.releaseHold(slotId);
+        await notificationsService.removeCachedPushTokenForCurrentUser();
       } catch {
-        // Best-effort before clearing local session.
+        // Best-effort; never block sign-out on push token cleanup.
+      }
+    } finally {
+      try {
+        await authService.signOut();
+      } finally {
+        setSession(null);
+        signingOutRef.current = false;
+        router.replace("/sign-in");
       }
     }
-    resetBookingDraft();
-    await notificationsService.removeCachedPushTokenForCurrentUser();
-    await authService.signOut();
-    setSession(null);
-    router.replace("/sign-in");
   };
 
   return (

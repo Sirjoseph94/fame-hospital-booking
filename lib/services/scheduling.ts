@@ -43,7 +43,11 @@ import {
 export type SchedulingErrorCode =
   | "SLOT_TAKEN"
   | "HOLD_EXPIRED"
-  | "NETWORK_ERROR";
+  | "NETWORK_ERROR"
+  /** Caller is not allowed to perform the action (retrying won't help). */
+  | "FORBIDDEN"
+  /** Request is invalid for the current state (retrying won't help). */
+  | "INVALID_REQUEST";
 
 export class SchedulingError extends Error {
   constructor(
@@ -64,8 +68,6 @@ export interface ConfirmBookingInput {
   hold: SlotHold;
   reason?: string;
   notes?: string;
-  room?: string;
-  videoUrl?: string;
   address?: string;
 }
 
@@ -157,15 +159,24 @@ export interface SchedulingService {
   injectNextFailure(code: SchedulingErrorCode): void;
 }
 
+// Dev-only fault injection (used by app/dev/kitchen-sink). Always inert in
+// production builds.
 let nextFailure: SchedulingErrorCode | null = null;
 
+/** Optional artificial latency for exercising loading states in dev. */
 function wait(): Promise<void> {
+  if (schedulingLatencyMs <= 0) {
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
     setTimeout(resolve, schedulingLatencyMs);
   });
 }
 
 function consumeFailure(expected?: SchedulingErrorCode): void {
+  if (!__DEV__) {
+    return;
+  }
   if (nextFailure === null || (expected && nextFailure !== expected)) {
     return;
   }
@@ -176,20 +187,50 @@ function consumeFailure(expected?: SchedulingErrorCode): void {
     SLOT_TAKEN: "That appointment time was just taken.",
     HOLD_EXPIRED: "Your five-minute slot hold has expired.",
     NETWORK_ERROR: "The scheduling service could not be reached.",
+    FORBIDDEN: "You are not allowed to do that.",
+    INVALID_REQUEST: "That request is not valid right now.",
   };
   throw new SchedulingError(code, messages[code]);
 }
 
+/**
+ * Maps an unknown/Supabase error to a SchedulingError. Postgres permission
+ * errors (RLS / guard triggers) and check violations are surfaced as
+ * non-retryable codes instead of NETWORK_ERROR.
+ */
 function asNetworkError(error: unknown): never {
+  const pgCode =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
   const message =
-    error instanceof Error ? error.message : "Unexpected scheduling error.";
-  throw new SchedulingError("NETWORK_ERROR", message);
+    error && typeof error === "object" && "message" in error
+      ? String((error as { message?: unknown }).message ?? "")
+      : "";
+
+  if (pgCode === "42501") {
+    throw new SchedulingError(
+      "FORBIDDEN",
+      message || "You are not allowed to do that.",
+    );
+  }
+  if (pgCode === "22023" || pgCode === "23514" || pgCode === "23505") {
+    throw new SchedulingError(
+      "INVALID_REQUEST",
+      message || "That request is not valid right now.",
+    );
+  }
+  throw new SchedulingError(
+    "NETWORK_ERROR",
+    message || "Unexpected scheduling error.",
+  );
 }
 
 type SlotRpcPayload = {
   success?: boolean;
   code?: string;
   expires_at?: string;
+  appointment_id?: string;
 };
 
 function schedulingErrorFromSlotRpc(code: string | undefined): SchedulingError {
@@ -203,6 +244,39 @@ function schedulingErrorFromSlotRpc(code: string | undefined): SchedulingError {
     return new SchedulingError(
       "SLOT_TAKEN",
       "That appointment time was just taken.",
+    );
+  }
+  if (code === "NOT_AUTHENTICATED") {
+    return new SchedulingError(
+      "FORBIDDEN",
+      "You must be signed in to use scheduling.",
+    );
+  }
+  if (code === "FORBIDDEN") {
+    return new SchedulingError(
+      "FORBIDDEN",
+      "You cannot modify this appointment.",
+    );
+  }
+  if (code === "NOT_FOUND") {
+    return new SchedulingError("INVALID_REQUEST", "Appointment not found.");
+  }
+  if (code === "NOT_MODIFIABLE") {
+    return new SchedulingError(
+      "INVALID_REQUEST",
+      "This appointment can no longer be changed.",
+    );
+  }
+  if (code === "WRONG_DOCTOR") {
+    return new SchedulingError(
+      "INVALID_REQUEST",
+      "Reschedule must stay with the same doctor.",
+    );
+  }
+  if (code === "INVALID_INPUT") {
+    return new SchedulingError(
+      "INVALID_REQUEST",
+      "Some booking details are invalid. Check the form and try again.",
     );
   }
   return new SchedulingError(
@@ -224,7 +298,10 @@ async function invokeSlotRpc(
     | "hold_slot_if_available"
     | "release_slot_hold"
     | "book_held_slot"
-    | "free_orphan_booked_slot",
+    | "free_orphan_booked_slot"
+    | "book_appointment_from_hold"
+    | "reschedule_appointment"
+    | "cancel_appointment",
   args: Record<string, unknown> = {},
 ): Promise<SlotRpcPayload> {
   const { data, error } = await supabase.rpc(fn, args);
@@ -245,7 +322,7 @@ async function getCurrentUserId(): Promise<string> {
   } = await supabase.auth.getUser();
   if (error || !user) {
     throw new SchedulingError(
-      "NETWORK_ERROR",
+      "FORBIDDEN",
       "You must be signed in to use scheduling.",
     );
   }
@@ -278,7 +355,7 @@ async function assertCanManageDoctorSchedule(doctorId: string): Promise<void> {
   }
 
   throw new SchedulingError(
-    "NETWORK_ERROR",
+    "FORBIDDEN",
     "You cannot manage this doctor's schedule.",
   );
 }
@@ -352,7 +429,7 @@ async function fetchAppointmentRow(
   }
   if (!data) {
     throw new SchedulingError(
-      "NETWORK_ERROR",
+      "INVALID_REQUEST",
       "Appointment not found.",
     );
   }
@@ -391,13 +468,13 @@ function assertCanManageAppointment(
   const manager = appointmentManager(row, userId);
   if (!manager) {
     throw new SchedulingError(
-      "NETWORK_ERROR",
+      "FORBIDDEN",
       "You cannot modify this appointment.",
     );
   }
   if (row.status === "cancelled" || row.status === "completed") {
     throw new SchedulingError(
-      "NETWORK_ERROR",
+      "INVALID_REQUEST",
       "This appointment can no longer be changed.",
     );
   }
@@ -453,7 +530,9 @@ function assertValidHold(
 
 export const schedulingService: SchedulingService = {
   injectNextFailure(code) {
-    nextFailure = code;
+    if (__DEV__) {
+      nextFailure = code;
+    }
   },
 
   async listBeneficiaries(accountHolderId) {
@@ -554,7 +633,7 @@ export const schedulingService: SchedulingService = {
       const userId = await getCurrentUserId();
       if (userId !== input.accountHolderId) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "FORBIDDEN",
           "You can only add beneficiaries to your own account.",
         );
       }
@@ -572,7 +651,7 @@ export const schedulingService: SchedulingService = {
         }
         if (existingSelf) {
           throw new SchedulingError(
-            "NETWORK_ERROR",
+            "INVALID_REQUEST",
             "Your self patient profile already exists.",
           );
         }
@@ -661,7 +740,7 @@ export const schedulingService: SchedulingService = {
       const role = await getCurrentUserRole();
       if (role !== "admin") {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "FORBIDDEN",
           "Only administrators can view the full roster.",
         );
       }
@@ -841,11 +920,13 @@ export const schedulingService: SchedulingService = {
       const userId = await getCurrentUserId();
       if (userId !== input.accountHolderId) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "FORBIDDEN",
           "You can only confirm bookings for your own account.",
         );
       }
 
+      // Client-side pre-check for a fast, specific error; the RPC re-validates
+      // everything inside one transaction.
       const { data: holdRow, error: holdError } = await supabase
         .from("slot_holds")
         .select("slot_id, expires_at, held_by")
@@ -856,84 +937,36 @@ export const schedulingService: SchedulingService = {
         asNetworkError(holdError);
       }
 
-      const activeHold: SlotHold | null = holdRow
-        ? {
-            slotId: holdRow.slot_id as string,
-            expiresAt: holdRow.expires_at as string,
-          }
-        : null;
       assertValidHold(
         input.slotId,
         input.hold,
-        activeHold,
+        holdRow
+          ? {
+              slotId: holdRow.slot_id as string,
+              expiresAt: holdRow.expires_at as string,
+            }
+          : null,
         holdRow?.held_by as string | undefined,
         userId,
       );
 
-      const { data: slot, error: slotError } = await supabase
-        .from("appointment_slots")
-        .select("*")
-        .eq("id", input.slotId)
-        .maybeSingle();
+      const payload = await invokeSlotRpc("book_appointment_from_hold", {
+        p_slot_id: input.slotId,
+        p_beneficiary_id: input.beneficiaryId,
+        p_appointment_type: input.type,
+        p_reason: input.reason?.trim() || null,
+        p_notes: input.notes?.trim() || null,
+        p_address: input.address?.trim() || null,
+      });
 
-      if (slotError || !slot) {
+      if (!payload.appointment_id) {
         throw new SchedulingError(
-          "SLOT_TAKEN",
-          "That appointment time is no longer available.",
+          "NETWORK_ERROR",
+          "The scheduling service could not be reached.",
         );
       }
 
-      if (parseISO(slotStartsAt(slot as SlotRow)).getTime() < Date.now()) {
-        throw new SchedulingError(
-          "SLOT_TAKEN",
-          "That appointment time is in the past.",
-        );
-      }
-
-      const slotRow = slot as SlotRow;
-      if (slotRow.doctor_id !== input.doctorId || slotRow.status !== "held") {
-        throw new SchedulingError(
-          "SLOT_TAKEN",
-          "That appointment time is no longer available.",
-        );
-      }
-
-      const startTime =
-        slotRow.start_time.length === 5
-          ? `${slotRow.start_time}:00`
-          : slotRow.start_time;
-
-      const { data: appointmentRow, error: insertError } = await supabase
-        .from("appointments")
-        .insert({
-          patient_id: input.accountHolderId,
-          account_holder_id: input.accountHolderId,
-          beneficiary_id: input.beneficiaryId,
-          doctor_id: input.doctorId,
-          slot_id: input.slotId,
-          appointment_date: slotRow.slot_date,
-          start_time: startTime,
-          status: "pending",
-          appointment_type: input.type,
-          reason: input.reason?.trim() || null,
-          notes: input.notes?.trim() || null,
-          room: input.room ?? null,
-          video_url: input.videoUrl ?? null,
-          address: input.address?.trim() || null,
-        })
-        .select("*")
-        .single();
-
-      if (insertError || !appointmentRow) {
-        throw new SchedulingError(
-          "SLOT_TAKEN",
-          "That appointment time was just taken.",
-        );
-      }
-
-      await invokeSlotRpc("book_held_slot", { p_slot_id: input.slotId });
-
-      return mapAppointment(appointmentRow as AppointmentRow);
+      return mapAppointment(await fetchAppointmentRow(payload.appointment_id));
     } catch (error) {
       if (error instanceof SchedulingError) {
         throw error;
@@ -1075,13 +1108,13 @@ export const schedulingService: SchedulingService = {
 
       if (appointment.doctor_id !== userId) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "FORBIDDEN",
           "You can only confirm visits on your schedule.",
         );
       }
       if (appointment.status === "cancelled" || appointment.status === "completed") {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           "This appointment can no longer be confirmed.",
         );
       }
@@ -1095,13 +1128,13 @@ export const schedulingService: SchedulingService = {
 
       if (visitType === "in-clinic" && !room) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           "Enter a room before confirming an in-clinic visit.",
         );
       }
       if (visitType === "telehealth" && !videoUrl) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           "Enter a video link before confirming telehealth.",
         );
       }
@@ -1140,13 +1173,13 @@ export const schedulingService: SchedulingService = {
 
       if (appointment.doctor_id !== userId) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "FORBIDDEN",
           "You can only complete visits on your schedule.",
         );
       }
       if (appointment.status !== "confirmed") {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           "Only confirmed visits can be marked complete.",
         );
       }
@@ -1154,7 +1187,7 @@ export const schedulingService: SchedulingService = {
       const visitDateYmd = appointmentVisitDateYmd(appointment);
       if (visitDateYmd > todayYmdLocal()) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           "This visit is not ready to complete yet.",
         );
       }
@@ -1186,7 +1219,7 @@ export const schedulingService: SchedulingService = {
     try {
       const userId = await getCurrentUserId();
       const appointment = await fetchAppointmentRow(appointmentId);
-      const manager = assertCanManageAppointment(appointment, userId);
+      assertCanManageAppointment(appointment, userId);
 
       const { data: holdRow } = await supabase
         .from("slot_holds")
@@ -1207,81 +1240,14 @@ export const schedulingService: SchedulingService = {
         userId,
       );
 
-      const { data: newSlot, error: slotError } = await supabase
-        .from("appointment_slots")
-        .select("*")
-        .eq("id", newSlotId)
-        .maybeSingle();
+      // Moves the appointment, books the new slot and frees the old one in a
+      // single transaction.
+      await invokeSlotRpc("reschedule_appointment", {
+        p_appointment_id: appointmentId,
+        p_new_slot_id: newSlotId,
+      });
 
-      if (slotError || !newSlot || (newSlot as SlotRow).status !== "held") {
-        throw new SchedulingError(
-          "SLOT_TAKEN",
-          "The replacement appointment time is unavailable.",
-        );
-      }
-
-      const slotRow = newSlot as SlotRow;
-      if (parseISO(slotStartsAt(slotRow)).getTime() < Date.now()) {
-        throw new SchedulingError(
-          "SLOT_TAKEN",
-          "That appointment time is in the past.",
-        );
-      }
-      if (
-        manager === "doctor" &&
-        slotRow.doctor_id !== appointment.doctor_id
-      ) {
-        throw new SchedulingError(
-          "NETWORK_ERROR",
-          "Choose a slot on your own schedule.",
-        );
-      }
-      if (
-        manager === "patient" &&
-        slotRow.doctor_id !== appointment.doctor_id
-      ) {
-        throw new SchedulingError(
-          "NETWORK_ERROR",
-          "Reschedule must stay with the same doctor.",
-        );
-      }
-
-      const previousSlotId = appointment.slot_id;
-      const startTime =
-        slotRow.start_time.length === 5
-          ? `${slotRow.start_time}:00`
-          : slotRow.start_time;
-
-      const nextStatus =
-        manager === "patient" && appointment.status === "pending"
-          ? "pending"
-          : "confirmed";
-
-      const { data: updated, error: updateError } = await supabase
-        .from("appointments")
-        .update({
-          slot_id: newSlotId,
-          doctor_id: slotRow.doctor_id,
-          appointment_date: slotRow.slot_date,
-          start_time: startTime,
-          status: nextStatus,
-        })
-        .eq("id", appointmentId)
-        .select("*")
-        .single();
-
-      if (updateError || !updated) {
-        asNetworkError(updateError ?? new Error("Reschedule failed."));
-      }
-
-      if (previousSlotId) {
-        await invokeSlotRpc("free_orphan_booked_slot", {
-          p_slot_id: previousSlotId,
-        });
-      }
-      await invokeSlotRpc("book_held_slot", { p_slot_id: newSlotId });
-
-      return mapAppointment(updated as AppointmentRow);
+      return mapAppointment(await fetchAppointmentRow(appointmentId));
     } catch (error) {
       if (error instanceof SchedulingError) {
         throw error;
@@ -1296,34 +1262,17 @@ export const schedulingService: SchedulingService = {
 
     try {
       const userId = await getCurrentUserId();
-      await assertCanManageAppointment(
+      assertCanManageAppointment(
         await fetchAppointmentRow(appointmentId),
         userId,
       );
 
-      const { data: updated, error } = await supabase
-        .from("appointments")
-        .update({ status: "cancelled" })
-        .eq("id", appointmentId)
-        .select("*, appointment_slots(slot_date, start_time, end_time)")
-        .single();
+      // Cancels and frees the slot in a single transaction.
+      await invokeSlotRpc("cancel_appointment", {
+        p_appointment_id: appointmentId,
+      });
 
-      if (error || !updated) {
-        asNetworkError(error ?? new Error("Cancel failed."));
-      }
-
-      const row = updated as AppointmentRow;
-      if (row.slot_id) {
-        try {
-          await invokeSlotRpc("free_orphan_booked_slot", {
-            p_slot_id: row.slot_id,
-          });
-        } catch {
-          // Appointment is cancelled; slot cleanup is best-effort.
-        }
-      }
-
-      return mapAppointment({ ...row, status: "cancelled" });
+      return mapAppointment(await fetchAppointmentRow(appointmentId));
     } catch (error) {
       if (error instanceof SchedulingError) {
         throw error;
@@ -1429,7 +1378,7 @@ export const schedulingService: SchedulingService = {
         assertScheduleInstantNotInPast(parseISO(`${input.slotDate}T${startTime}`));
       } catch (cause) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           cause instanceof Error
             ? cause.message
             : "Cannot schedule in the past.",
@@ -1493,7 +1442,7 @@ export const schedulingService: SchedulingService = {
 
       if (slotRow.status === "booked" || slotRow.status === "held") {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           "Booked or held slots cannot be removed. Cancel the appointment first.",
         );
       }
@@ -1553,7 +1502,7 @@ export const schedulingService: SchedulingService = {
         assertScheduleInstantNotInPast(input.startsAt);
       } catch (cause) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           cause instanceof Error
             ? cause.message
             : "Cannot schedule in the past.",
@@ -1660,7 +1609,7 @@ export const schedulingService: SchedulingService = {
 
       if (parseISO(rule.endsAt).getTime() <= Date.now()) {
         throw new SchedulingError(
-          "NETWORK_ERROR",
+          "INVALID_REQUEST",
           "Past blackouts cannot be removed.",
         );
       }

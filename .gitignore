@@ -5,3 +5,19 @@
 expo-env.d.ts
 # @end expo-cli
 node_modules
+.expo/
+# Local environment (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+web-build/
+
+# Supabase CLI local state
+supabase/.temp/
+supabase/.branches/
+
+# OS / editor
+.DS_Store

@@ -34,6 +34,7 @@ Run each file as a **New query** in **SQL Editor**, top to bottom. Wait for succ
 | 7 | [`supabase/migrations/20260918_blackout_delete_policy.sql`](../supabase/migrations/20260918_blackout_delete_policy.sql) | Doctor **delete** on own `blackout_rules` (Phase 5) |
 | 8 | [`supabase/migrations/20260919_phase7_slot_security.sql`](../supabase/migrations/20260919_phase7_slot_security.sql) | **Phase 7:** slot hold/book RPCs, drop broad slot UPDATE policy, `admin_audit_log` |
 | 9 | [`supabase/migrations/20260920_notifications.sql`](../supabase/migrations/20260920_notifications.sql) | Notification preferences, push tokens, delivery outbox, appointment triggers |
+| 10 | [`supabase/migrations/20260921000000_security_hardening.sql`](../supabase/migrations/20260921000000_security_hardening.sql) | **Required.** Role-escalation fixes, transactional booking RPCs, appointment write lockdown, invite/claim hardening, function privileges, indexes. See §7a. |
 
 ### Skip duplicate `doctor_invites`
 
@@ -47,7 +48,8 @@ where table_schema = 'public'
   and table_name in (
     'profiles', 'doctors', 'appointment_slots', 'appointments',
     'beneficiaries', 'slot_holds', 'doctor_invites', 'hospital_settings',
-    'notification_preferences', 'push_device_tokens', 'notification_deliveries'
+    'notification_preferences', 'push_device_tokens', 'notification_deliveries',
+    'blackout_rules', 'admin_audit_log'
   )
 order by 1;
 ```
@@ -58,7 +60,7 @@ You should see all listed tables.
 
 ## 3. Create the first admin
 
-Every sign-up gets `role = 'patient'` from the auth trigger unless metadata overrides it. **Do not** rely on self-service admin sign-up for production.
+Every sign-up gets `role = 'patient'` from the auth trigger. Sign-up metadata **cannot** set a role, and users cannot change their own `role` / `is_active` (enforced by a trigger after step 10). Promote the first admin manually:
 
 **Option A — Dashboard**
 
@@ -101,7 +103,7 @@ on conflict (id) do nothing;
 
 ### 4b. Invite row + RPC (database only)
 
-Admins can insert a row into `doctor_invites` and share the code. The **`claim_doctor_invite`** RPC exists in the database, but **the patient/doctor claim UI ships in Phase 1**. For pilot testing without Phase 1, prefer **4a** or have the doctor user call the RPC from a one-off client session once claim UI exists.
+Admins create invites from the Roster screen and share the code. After step 10 the code can only be claimed by a signed-in user **whose email matches the invite email** (case-insensitive), and invite rows are no longer readable by non-admins. The **`claim_doctor_invite`** RPC exists in the database, but **the patient/doctor claim UI ships in Phase 1**. For pilot testing without Phase 1, prefer **4a** or have the doctor user call the RPC from a one-off client session once claim UI exists.
 
 ---
 
@@ -143,7 +145,7 @@ After migration **step 8** (`20260919_phase7_slot_security.sql`), patient slot t
 | `release_slot_hold` | Caller releases their hold |
 | `book_held_slot` | Caller’s valid hold → `booked` |
 | `free_orphan_booked_slot` | `booked` → `available` when no pending/confirmed appointment references the slot (cancel / reschedule) |
-| `cleanup_expired_slot_holds` | Expired holds + `held` → `available` (called from listing/hold RPCs) |
+| `cleanup_expired_slot_holds` | Expired holds + `held` → `available` (called by `hold_slot_if_available`; scheduled every minute by pg_cron after step 10 if the extension is enabled) |
 
 The policy **“Authenticated users update slots for booking”** is **dropped**. Doctors and admins still manage slots via existing doctor/admin RLS policies (schedule, blackouts).
 
@@ -152,6 +154,25 @@ The policy **“Authenticated users update slots for booking”** is **dropped**
 **Deploy note:** Apply step 8 **before** shipping a client build that calls these RPCs. Older app versions against a DB without step 8 still rely on the broad UPDATE policy (step 2 only).
 
 **Pre–Phase 7 pilots (step 8 not applied):** holds were client-side upserts with a race (I-21) and any authenticated user could UPDATE slots (I-22). Do not run a Phase 7 client against that schema.
+
+### 7a. Security hardening (step 10)
+
+`20260921000000_security_hardening.sql` must be applied **before** shipping a client build that includes the transactional booking changes — the client calls the new RPCs below, and the migration removes patients' direct INSERT/UPDATE on `appointments`, so **older clients can no longer book, reschedule or cancel** once it is applied. Deploy DB + client together.
+
+| RPC | Purpose |
+|-----|---------|
+| `book_appointment_from_hold` | Validates hold, slot, doctor availability and beneficiary; inserts the appointment, books the slot, clears the hold — one transaction |
+| `reschedule_appointment` | Moves an appointment to a slot the caller holds (same doctor), books it, frees the old slot — one transaction |
+| `cancel_appointment` | Cancels and frees the slot — one transaction |
+
+Other changes:
+
+- `appointments_one_active_per_slot` — partial unique index; the migration aborts with instructions if duplicates exist.
+- Doctors may still update their own appointments directly, but only `status` (pending→confirmed/cancelled, confirmed→completed/cancelled), `room`, `video_url` and `notes`. `video_url` must be `https://`.
+- Taking a new slot hold releases the caller's other holds (one active hold per user). Holds are visible only to their owner.
+- Internal SECURITY DEFINER helpers (`enqueue_notification_deliveries`, `log_admin_audit`, trigger functions) are no longer executable by `anon`/`authenticated`.
+- `free_orphan_booked_slot` is restricted to the slot's doctor or an admin.
+- **pg_cron (recommended):** enable it under Database → Extensions, then re-run the migration to schedule the expired-hold sweep.
 
 ---
 
@@ -231,12 +252,15 @@ From the repo root (Supabase CLI logged in to the project):
 supabase functions deploy dispatch-notifications --no-verify-jwt
 ```
 
-`--no-verify-jwt` allows the **Database Webhook** to POST without a user JWT. Restrict invocation in production (webhook secret header or Supabase-internal webhook only).
+`--no-verify-jwt` allows the **Database Webhook** to POST without a user JWT. The function therefore requires a shared secret in the `x-webhook-secret` header and **rejects every request (fails closed) until `NOTIFICATION_WEBHOOK_SECRET` is set**.
+
+Generate one with `openssl rand -hex 32`.
 
 Set secrets (Dashboard → Edge Functions → Secrets, or CLI):
 
 | Secret | Purpose |
 |--------|---------|
+| `NOTIFICATION_WEBHOOK_SECRET` | **Required.** Shared secret the Database Webhook sends as `x-webhook-secret` |
 | `RESEND_API_KEY` | [Resend](https://resend.com) transactional email |
 | `NOTIFICATION_FROM_EMAIL` | Verified sender, e.g. `FAME Hospital <booking@yourdomain.com>` |
 | `TWILIO_ACCOUNT_SID` | Twilio SMS |
@@ -254,8 +278,9 @@ In **Supabase Dashboard → Database → Webhooks → Create**:
 3. **Type:** Supabase Edge Function → `dispatch-notifications`
 4. **HTTP method:** POST
 5. **Payload:** send the new row (include `id`)
+6. **HTTP headers:** add `x-webhook-secret: <NOTIFICATION_WEBHOOK_SECRET value>`
 
-The function reads `record.id` and processes that delivery row.
+The function reads `record.id`, atomically claims the row (`pending` → `processing`) so retries cannot double-send, and records `attempts`. Rows stuck in `processing` (e.g. function crash) can be reset to `pending` and replayed manually.
 
 ### User opt-in
 

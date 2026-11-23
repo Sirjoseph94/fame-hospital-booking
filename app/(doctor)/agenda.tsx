@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   AccessibilityInfo,
-  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -10,7 +9,7 @@ import {
 } from "react-native";
 import * as Linking from "expo-linking";
 import { addDays, format, startOfDay, subDays } from "date-fns";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
 
 import { ConfirmVisitSheet } from "@/components/doctor/confirm-visit-sheet";
@@ -24,6 +23,8 @@ import {
   ScreenLoadingSkeleton,
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
+import { confirmAsync, showAlert } from "@/lib/confirm";
+import { useNow } from "@/lib/hooks/use-now";
 import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
   buildDoctorAgendaTimeline,
@@ -40,13 +41,13 @@ import { useSessionStore } from "@/lib/stores/session";
 
 export default function DoctorAgendaScreen() {
   const session = useSessionStore((state) => state.session);
+  const userId = session?.userId;
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
   const [visits, setVisits] = useState<DoctorAgendaVisit[]>([]);
   const [bufferMinutes, setBufferMinutes] = useState(15);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [, setJoinTick] = useState(0);
   const [rescheduleTarget, setRescheduleTarget] =
     useState<DoctorAgendaVisit | null>(null);
   const [manageBusyId, setManageBusyId] = useState<string | null>(null);
@@ -57,20 +58,18 @@ export default function DoctorAgendaScreen() {
   const [confirmSubmitting, setConfirmSubmitting] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const timer = setInterval(() => setJoinTick((value) => value + 1), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  // Re-render every minute so telehealth join windows stay current.
+  useNow(60_000);
 
   const load = useCallback(async () => {
-    if (!session) {
+    if (!userId) {
       return;
     }
 
     setError(null);
     try {
       const appointments = await schedulingService.listDoctorAppointments(
-        session.userId,
+        userId,
       );
       const [settings, contextById] = await Promise.all([
         schedulingService.getSettings(),
@@ -111,12 +110,15 @@ export default function DoctorAgendaScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [session]);
+  }, [userId]);
 
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  // Runs on first focus and every time the tab regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      const task = setTimeout(() => void load(), 0);
+      return () => clearTimeout(task);
+    }, [load]),
+  );
 
   const dayVisits = useMemo(
     () => filterVisitsForDay(visits, selectedDay),
@@ -184,84 +186,67 @@ export default function DoctorAgendaScreen() {
     }
   };
 
-  const markVisitComplete = (visit: DoctorAgendaVisit) => {
-    Alert.alert(
-      "Mark visit complete?",
-      "The patient will see this visit in their Past tab.",
-      [
-        { text: "Not yet", style: "cancel" },
-        {
-          text: "Mark complete",
-          onPress: () => {
-            void (async () => {
-              setManageBusyId(visit.id);
-              setActionBanner(null);
-              try {
-                await schedulingService.completeDoctorAppointment(visit.id);
-                setActionBanner("Visit marked complete.");
-                AccessibilityInfo.announceForAccessibility(
-                  "Visit marked complete.",
-                );
-                await load();
-              } catch (cause) {
-                const message =
-                  cause instanceof SchedulingError
-                    ? cause.message
-                    : "Could not mark the visit complete.";
-                Alert.alert("Could not complete visit", message);
-              } finally {
-                setManageBusyId(null);
-              }
-            })();
-          },
-        },
-      ],
-    );
+  const markVisitComplete = async (visit: DoctorAgendaVisit) => {
+    const confirmed = await confirmAsync({
+      title: "Mark visit complete?",
+      message: "The patient will see this visit in their Past tab.",
+      confirmText: "Mark complete",
+      cancelText: "Not yet",
+    });
+    if (!confirmed) {
+      return;
+    }
+    setManageBusyId(visit.id);
+    setActionBanner(null);
+    try {
+      await schedulingService.completeDoctorAppointment(visit.id);
+      setActionBanner("Visit marked complete.");
+      AccessibilityInfo.announceForAccessibility("Visit marked complete.");
+      await load();
+    } catch (cause) {
+      const message =
+        cause instanceof SchedulingError
+          ? cause.message
+          : "Could not mark the visit complete.";
+      showAlert("Could not complete visit", message);
+    } finally {
+      setManageBusyId(null);
+    }
   };
 
-  const cancelVisit = (visit: DoctorAgendaVisit) => {
-    Alert.alert(
-      "Cancel appointment?",
-      "The patient will be notified and the slot will reopen.",
-      [
-        { text: "Keep appointment", style: "cancel" },
-        {
-          text: "Cancel appointment",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              setManageBusyId(visit.id);
-              setActionBanner(null);
-              try {
-                await schedulingService.cancelAppointment(visit.id);
-                setActionBanner("Appointment cancelled.");
-                AccessibilityInfo.announceForAccessibility(
-                  "Appointment cancelled.",
-                );
-                await load();
-              } catch (cause) {
-                const message =
-                  cause instanceof SchedulingError
-                    ? cause.message
-                    : "Could not cancel the appointment.";
-                Alert.alert("Cancel failed", message);
-              } finally {
-                setManageBusyId(null);
-              }
-            })();
-          },
-        },
-      ],
-    );
+  const cancelVisit = async (visit: DoctorAgendaVisit) => {
+    const confirmed = await confirmAsync({
+      title: "Cancel appointment?",
+      message: "The patient will be notified and the slot will reopen.",
+      confirmText: "Cancel appointment",
+      cancelText: "Keep appointment",
+      destructive: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    setManageBusyId(visit.id);
+    setActionBanner(null);
+    try {
+      await schedulingService.cancelAppointment(visit.id);
+      setActionBanner("Appointment cancelled.");
+      AccessibilityInfo.announceForAccessibility("Appointment cancelled.");
+      await load();
+    } catch (cause) {
+      const message =
+        cause instanceof SchedulingError
+          ? cause.message
+          : "Could not cancel the appointment.";
+      showAlert("Cancel failed", message);
+    } finally {
+      setManageBusyId(null);
+    }
   };
 
   const joinTelehealth = (visit: DoctorAgendaVisit) => {
     const url = visit.videoUrl;
     if (!url) {
-      Alert.alert(
-        "Join unavailable",
-        "This telehealth link is not ready yet.",
-      );
+      showAlert("Join unavailable", "This telehealth link is not ready yet.");
       return;
     }
     void Linking.openURL(url);
@@ -293,7 +278,7 @@ export default function DoctorAgendaScreen() {
         status={visit.status}
         telehealthJoinLabel={join.showJoin ? join.label : undefined}
         type={visit.type}
-        onCancel={canManage ? () => cancelVisit(visit) : undefined}
+        onCancel={canManage ? () => void cancelVisit(visit) : undefined}
         onConfirm={
           canManage && visit.dbStatus === "pending"
             ? () => confirmVisit(visit)
@@ -301,7 +286,7 @@ export default function DoctorAgendaScreen() {
         }
         onJoinTelehealth={() => joinTelehealth(visit)}
         onMarkComplete={
-          canMarkComplete ? () => markVisitComplete(visit) : undefined
+          canMarkComplete ? () => void markVisitComplete(visit) : undefined
         }
         onReschedule={
           canManage ? () => setRescheduleTarget(visit) : undefined

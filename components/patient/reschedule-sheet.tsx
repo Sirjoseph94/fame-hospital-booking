@@ -85,16 +85,27 @@ export function RescheduleSheet({
     setSubmitting(true);
     setActionError(null);
     setActionErrorCode(null);
+    let heldSlotId: string | null = null;
     try {
       const hold = await schedulingService.holdSlot(selectedSlotId);
+      heldSlotId = selectedSlotId;
       await schedulingService.rescheduleAppointment(
         appointmentId,
         selectedSlotId,
         hold,
       );
+      heldSlotId = null;
       onRescheduled();
       onOpenChange(false);
     } catch (cause) {
+      if (heldSlotId) {
+        // Don't leave the replacement slot locked for 5 minutes after a failure.
+        try {
+          await schedulingService.releaseHold(heldSlotId);
+        } catch {
+          // Best-effort; the hold expires on its own.
+        }
+      }
       const message =
         cause instanceof SchedulingError
           ? cause.message

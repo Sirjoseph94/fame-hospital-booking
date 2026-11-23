@@ -92,6 +92,25 @@ export function buildSmsBody(
   return text.length <= 160 ? text : `${push.title}. ${formatWhen(ctx)}. Open the app for details.`;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** Only https links are rendered as anchors; anything else is shown as text. */
+function safeHttpsUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function buildEmailContent(
   eventType: NotificationEventType,
   ctx: AppointmentContext,
@@ -102,14 +121,17 @@ export function buildEmailContent(
 
   let details = "";
   if (ctx.appointmentType === "telehealth" && ctx.videoUrl) {
-    details = `<p>Video link: <a href="${ctx.videoUrl}">${ctx.videoUrl}</a></p>`;
+    const href = safeHttpsUrl(ctx.videoUrl);
+    details = href
+      ? `<p>Video link: <a href="${escapeHtml(href)}">${escapeHtml(href)}</a></p>`
+      : `<p>Video link: open the FAME Hospital app.</p>`;
   } else if (ctx.appointmentType === "in-clinic" && ctx.room) {
-    details = `<p>Room: ${ctx.room}</p>`;
+    details = `<p>Room: ${escapeHtml(ctx.room)}</p>`;
   } else if (ctx.appointmentType === "home-visit" && ctx.address) {
-    details = `<p>Address: ${ctx.address}</p>`;
+    details = `<p>Address: ${escapeHtml(ctx.address)}</p>`;
   }
 
-  const html = `<p>${push.body}</p><p><strong>When:</strong> ${formatWhen(ctx)}</p><p><strong>Type:</strong> ${typeLabel(ctx.appointmentType)}</p>${details}<p>Open the FAME Hospital app for details.</p>`;
+  const html = `<p>${escapeHtml(push.body)}</p><p><strong>When:</strong> ${escapeHtml(formatWhen(ctx))}</p><p><strong>Type:</strong> ${escapeHtml(typeLabel(ctx.appointmentType))}</p>${details}<p>Open the FAME Hospital app for details.</p>`;
 
   return { subject, text, html };
 }

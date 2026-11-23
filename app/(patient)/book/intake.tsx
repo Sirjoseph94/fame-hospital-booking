@@ -10,7 +10,7 @@ import { useBookingStore } from "@/lib/stores/booking";
 import { useSessionStore } from "@/lib/stores/session";
 
 export default function BookIntakeScreen() {
-  const session = useSessionStore((state) => state.session);
+  const userId = useSessionStore((state) => state.session?.userId);
   const appointmentType = useBookingStore((state) => state.appointmentType);
   const setAppointmentType = useBookingStore((state) => state.setAppointmentType);
   const setIntake = useBookingStore((state) => state.setIntake);
@@ -22,16 +22,27 @@ export default function BookIntakeScreen() {
   const [address, setAddress] = useState(visitAddress);
   const [addressError, setAddressError] = useState<string | null>(null);
 
+  // Prefill the home-visit address once from the profile (only if still empty),
+  // so clearing the field doesn't refetch and re-populate it.
   useEffect(() => {
-    if (!session || address.trim()) {
+    if (!userId) {
       return;
     }
-    void profileService.getPatientProfile(session.userId).then((profile) => {
-      if (profile.address) {
-        setAddress(profile.address);
-      }
-    });
-  }, [address, session]);
+    let cancelled = false;
+    profileService
+      .getPatientProfile(userId)
+      .then((profile) => {
+        if (!cancelled && profile.address) {
+          setAddress((current) => (current.trim() ? current : profile.address!));
+        }
+      })
+      .catch(() => {
+        // Prefill is best-effort.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   const continueToConfirm = () => {
     if (appointmentType === "home-visit" && address.trim().length < 5) {

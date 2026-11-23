@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -13,6 +13,7 @@ import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { FormTextInput } from "@/components/ui/form-text-input";
+import { confirmAsync } from "@/lib/confirm";
 import { copyText } from "@/lib/copy-text";
 import {
   InviteError,
@@ -61,6 +62,16 @@ export default function AdminRosterScreen() {
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
   const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
   const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     setError(null);
@@ -176,7 +187,17 @@ export default function AdminRosterScreen() {
     }
   };
 
-  const revokeInvite = async (inviteId: string) => {
+  const revokeInvite = async (invite: DoctorInvite) => {
+    const confirmed = await confirmAsync({
+      title: "Revoke invite?",
+      message: `The invite code for ${invite.email} will stop working immediately.`,
+      confirmText: "Revoke",
+      destructive: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    const inviteId = invite.id;
     setRevokingInviteId(inviteId);
     setInviteFormError(null);
     try {
@@ -195,6 +216,17 @@ export default function AdminRosterScreen() {
 
   const toggleDoctorActive = async (doctor: RosterDoctor) => {
     const nextActive = !doctor.accountActive;
+    if (!nextActive) {
+      const confirmed = await confirmAsync({
+        title: `Deactivate ${doctor.name}?`,
+        message: "They will no longer be able to sign in or receive bookings.",
+        confirmText: "Deactivate",
+        destructive: true,
+      });
+      if (!confirmed) {
+        return;
+      }
+    }
     setTogglingDoctorId(doctor.id);
     setToggleError(null);
     try {
@@ -216,7 +248,10 @@ export default function AdminRosterScreen() {
     const copied = await copyText(invite.code);
     if (copied) {
       setCopiedInviteId(invite.id);
-      setTimeout(() => setCopiedInviteId(null), 2000);
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+      }
+      copiedTimerRef.current = setTimeout(() => setCopiedInviteId(null), 2000);
     }
   };
 
@@ -408,7 +443,7 @@ export default function AdminRosterScreen() {
                       }}
                       className="min-h-11 flex-1 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
                       disabled={revokingInviteId === invite.id}
-                      onPress={() => void revokeInvite(invite.id)}
+                      onPress={() => void revokeInvite(invite)}
                     >
                       {revokingInviteId === invite.id ? (
                         <ActivityIndicator />

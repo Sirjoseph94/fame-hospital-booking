@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { AccessibilityInfo, Pressable, Text, View } from "react-native";
 
 import { useSlotHoldCountdown } from "@/lib/hooks/use-slot-hold-countdown";
@@ -10,10 +11,10 @@ export function BookingHoldBar() {
   const setHold = useBookingStore((state) => state.setHold);
   const resetBookingDraft = useBookingStore((state) => state.resetBookingDraft);
 
-  const onHoldExpired = () => {
+  const onHoldExpired = useCallback(() => {
     setHold(null);
     AccessibilityInfo.announceForAccessibility("Slot hold expired.");
-  };
+  }, [setHold]);
 
   const { label, isExpired } = useSlotHoldCountdown(
     hold?.expiresAt ?? null,
