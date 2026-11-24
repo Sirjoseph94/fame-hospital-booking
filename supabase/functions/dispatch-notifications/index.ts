@@ -1,4 +1,10 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import {
+  createClient,
+  type SupabaseClient,
+} from "https://esm.sh/@supabase/supabase-js@2.45.4";
+
+/** Service-role client (untyped schema: rows are plain records). */
+type Db = SupabaseClient;
 import {
   buildEmailContent,
   buildPushContent,
@@ -26,7 +32,18 @@ interface WebhookPayload {
   type?: string;
   record?: DeliveryRow;
   delivery_id?: string;
+  /** Scheduled sweep: recover stuck rows and retry pending ones. */
+  sweep?: boolean;
 }
+
+/** Attempts before a delivery is marked `failed` for good. */
+const MAX_ATTEMPTS = 3;
+/** A row `processing` longer than this is assumed to have crashed mid-send. */
+const STUCK_AFTER_MS = 10 * 60 * 1000;
+/** Pending rows younger than this are left to the webhook invocation. */
+const RETRY_AFTER_MS = 60 * 1000;
+/** Max deliveries handled per sweep call. */
+const SWEEP_BATCH = 50;
 
 function timingSafeEqual(a: string, b: string): boolean {
   const enc = new TextEncoder();
@@ -48,7 +65,7 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 async function loadAppointmentContext(
-  supabase: ReturnType<typeof createClient>,
+  supabase: Db,
   appointmentId: string,
 ): Promise<AppointmentContext | null> {
   const { data: appt, error } = await supabase
@@ -199,14 +216,14 @@ function normalizePhone(phone: string | null | undefined): string | null {
 }
 
 async function processDelivery(
-  supabase: ReturnType<typeof createClient>,
+  supabase: Db,
   deliveryId: string,
 ): Promise<{ id: string; status: string }> {
   // Atomically claim the row: only one invocation (webhook retry, manual
   // replay, concurrent call) can move it from pending → processing.
   const { data: claimed, error: claimError } = await supabase
     .from("notification_deliveries")
-    .update({ status: "processing" })
+    .update({ status: "processing", claimed_at: new Date().toISOString() })
     .eq("id", deliveryId)
     .eq("status", "pending")
     .select("*")
@@ -230,13 +247,21 @@ async function processDelivery(
 
   const row = claimed as DeliveryRow & { attempts?: number };
 
-  const mark = async (status: "sent" | "skipped" | "failed", error?: string) => {
+  const mark = async (
+    requested: "sent" | "skipped" | "failed",
+    error?: string,
+  ) => {
+    const attempts = (row.attempts ?? 0) + 1;
+    // A failed send goes back to `pending` for the sweep to retry, until the
+    // attempt limit is reached.
+    const status =
+      requested === "failed" && attempts < MAX_ATTEMPTS ? "pending" : requested;
     const { error: markError } = await supabase
       .from("notification_deliveries")
       .update({
         status,
         error: error ?? null,
-        attempts: (row.attempts ?? 0) + 1,
+        attempts,
         processed_at: new Date().toISOString(),
       })
       .eq("id", row.id);
@@ -324,9 +349,54 @@ async function processDelivery(
     return mark("failed", "unknown_channel");
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "send_failed";
-    await mark("failed", message);
-    return { id: row.id, status: "failed" };
+    return await mark("failed", message);
   }
+}
+
+/**
+ * Recovery pass (call on a schedule): reset rows stuck in `processing`, then
+ * process pending rows that the webhook missed or that failed and are due a
+ * retry. processDelivery's atomic claim keeps this safe alongside webhooks.
+ */
+async function sweep(
+  supabase: Db,
+): Promise<{ recovered: number; processed: { id: string; status: string }[] }> {
+  const stuckBefore = new Date(Date.now() - STUCK_AFTER_MS).toISOString();
+  const { data: recovered, error: recoverError } = await supabase
+    .from("notification_deliveries")
+    .update({ status: "pending", error: "recovered_after_stuck_processing" })
+    .eq("status", "processing")
+    .lt("claimed_at", stuckBefore)
+    .select("id");
+  if (recoverError) {
+    throw new Error(recoverError.message);
+  }
+
+  const retryBefore = new Date(Date.now() - RETRY_AFTER_MS).toISOString();
+  const { data: due, error: dueError } = await supabase
+    .from("notification_deliveries")
+    .select("id")
+    .eq("status", "pending")
+    .lt("attempts", MAX_ATTEMPTS)
+    .lt("created_at", retryBefore)
+    .order("created_at", { ascending: true })
+    .limit(SWEEP_BATCH);
+  if (dueError) {
+    throw new Error(dueError.message);
+  }
+
+  const processed: { id: string; status: string }[] = [];
+  for (const { id } of (due ?? []) as { id: string }[]) {
+    try {
+      processed.push(await processDelivery(supabase, id));
+    } catch (cause) {
+      processed.push({
+        id,
+        status: cause instanceof Error ? `error: ${cause.message}` : "error",
+      });
+    }
+  }
+  return { recovered: recovered?.length ?? 0, processed };
 }
 
 Deno.serve(async (req) => {
@@ -354,6 +424,10 @@ Deno.serve(async (req) => {
 
   try {
     const body = (await req.json()) as WebhookPayload;
+    if (body.sweep === true) {
+      return jsonResponse({ ok: true, ...(await sweep(supabase)) });
+    }
+
     const deliveryId =
       body.delivery_id ??
       body.record?.id ??
