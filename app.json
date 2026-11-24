@@ -12,10 +12,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourhospital.bookingapp"
+      "bundleIdentifier": "org.famehmrc.booking"
     },
     "android": {
-      "package": "com.yourhospital.bookingapp",
+      "package": "org.famehmrc.booking",
       "permissions": [
         "android.permission.READ_CALENDAR",
         "android.permission.WRITE_CALENDAR"
