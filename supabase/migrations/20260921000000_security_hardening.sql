@@ -1,6 +1,6 @@
 -- =========================================================================
 -- Security hardening (post-review)
--- Run after 20260920_notifications.sql.
+-- Runs after 20260920000000_notifications.sql.
 --
 -- Fixes:
 --   1. Sign-up no longer trusts client-supplied `role` metadata.
@@ -70,7 +70,7 @@ begin
 end;
 $$;
 
--- Pin search_path on the remaining definer helpers from schema.sql.
+-- Pin search_path on the remaining definer helper from the init migration.
 alter function public.current_role() set search_path = public;
 
 -- -------------------------------------------------------------------------

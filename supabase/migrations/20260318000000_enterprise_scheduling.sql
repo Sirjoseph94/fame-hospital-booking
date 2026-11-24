@@ -1,5 +1,5 @@
 -- Enterprise scheduling domain (beneficiaries, holds, blackouts, settings)
--- Run after schema.sql in the Supabase SQL editor.
+-- Runs after 20260317000000_init.sql.
 
 -- 1. Hospital-wide scheduling settings (admin-editable buffer between visits)
 create table if not exists public.hospital_settings (
@@ -100,34 +100,43 @@ alter table public.slot_holds enable row level security;
 alter table public.blackout_rules enable row level security;
 alter table public.hospital_settings enable row level security;
 
+drop policy if exists "Account holders manage beneficiaries" on public.beneficiaries;
 create policy "Account holders manage beneficiaries" on public.beneficiaries
   for all using (auth.uid() = account_holder_id)
   with check (auth.uid() = account_holder_id);
 
+drop policy if exists "Admins view all beneficiaries" on public.beneficiaries;
 create policy "Admins view all beneficiaries" on public.beneficiaries
   for select using (public.current_role() = 'admin');
 
+drop policy if exists "Authenticated users manage own holds" on public.slot_holds;
 create policy "Authenticated users manage own holds" on public.slot_holds
   for all using (auth.uid() = held_by)
   with check (auth.uid() = held_by);
 
+drop policy if exists "Authenticated users view holds" on public.slot_holds;
 create policy "Authenticated users view holds" on public.slot_holds
   for select using (auth.role() = 'authenticated');
 
+drop policy if exists "Doctors view own blackouts" on public.blackout_rules;
 create policy "Doctors view own blackouts" on public.blackout_rules
   for select using (auth.uid() = doctor_id);
 
+drop policy if exists "Doctors create own blackouts" on public.blackout_rules;
 create policy "Doctors create own blackouts" on public.blackout_rules
   for insert with check (
     auth.uid() = doctor_id and set_by = 'doctor'
   );
 
+drop policy if exists "Admins manage blackouts" on public.blackout_rules;
 create policy "Admins manage blackouts" on public.blackout_rules
   for all using (public.current_role() = 'admin');
 
+drop policy if exists "Authenticated read settings" on public.hospital_settings;
 create policy "Authenticated read settings" on public.hospital_settings
   for select using (auth.role() = 'authenticated');
 
+drop policy if exists "Admins update settings" on public.hospital_settings;
 create policy "Admins update settings" on public.hospital_settings
   for update using (public.current_role() = 'admin');
 
@@ -156,6 +165,7 @@ create policy "Patients create own appointments" on public.appointments
   );
 
 -- Patients need to move slots through held → booked during online booking
+drop policy if exists "Authenticated users update slots for booking" on public.appointment_slots;
 create policy "Authenticated users update slots for booking"
   on public.appointment_slots for update
   using (auth.role() = 'authenticated');

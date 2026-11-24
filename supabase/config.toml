@@ -1,0 +1,20 @@
+# Supabase CLI configuration (minimal). Unlisted settings use CLI defaults.
+# Docs: https://supabase.com/docs/guides/local-development/cli/config
+#
+#   supabase start       # local stack (Docker)
+#   supabase db reset    # rebuild local DB from supabase/migrations
+#   supabase link --project-ref <ref> && supabase db push   # apply to remote
+
+project_id = "hospital-booking-app"
+
+[db]
+# Matches the hosted project (Postgres 17).
+major_version = 17
+
+[db.seed]
+# seed_pilot.sql is commented templates only; nothing runs automatically.
+enabled = false
+
+[functions.dispatch-notifications]
+# Invoked by the Database Webhook with an x-webhook-secret header, not a user JWT.
+verify_jwt = false

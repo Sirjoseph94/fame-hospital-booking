@@ -1,6 +1,9 @@
 -- =========================================================
--- Hospital Booking App — Supabase Schema
--- Run this in the Supabase SQL editor (Project > SQL Editor)
+-- Hospital Booking App — initial schema
+-- Core tables (profiles, doctors, appointment_slots, appointments),
+-- sign-up trigger, current_role() helper and base RLS policies.
+--
+-- Migrations in this folder run in filename order. See docs/RUNBOOK.md §2.
 -- =========================================================
 
 -- 1. PROFILES
@@ -90,122 +93,57 @@ returns text as $$
 $$ language sql stable security definer;
 
 -- PROFILES policies
+drop policy if exists "Users can view own profile" on public.profiles;
 create policy "Users can view own profile" on public.profiles
   for select using (auth.uid() = id);
+drop policy if exists "Admins can view all profiles" on public.profiles;
 create policy "Admins can view all profiles" on public.profiles
   for select using (public.current_role() = 'admin');
+drop policy if exists "Users can update own profile" on public.profiles;
 create policy "Users can update own profile" on public.profiles
   for update using (auth.uid() = id);
+drop policy if exists "Admins can update any profile" on public.profiles;
 create policy "Admins can update any profile" on public.profiles
   for update using (public.current_role() = 'admin');
 
 -- DOCTORS policies (public read for anyone logged in — needed to browse doctors)
+drop policy if exists "Anyone authenticated can view doctors" on public.doctors;
 create policy "Anyone authenticated can view doctors" on public.doctors
   for select using (auth.role() = 'authenticated');
+drop policy if exists "Doctors can update own record" on public.doctors;
 create policy "Doctors can update own record" on public.doctors
   for update using (auth.uid() = id);
+drop policy if exists "Admins can manage doctors" on public.doctors;
 create policy "Admins can manage doctors" on public.doctors
   for all using (public.current_role() = 'admin');
 
 -- APPOINTMENT SLOTS policies
+drop policy if exists "Anyone authenticated can view slots" on public.appointment_slots;
 create policy "Anyone authenticated can view slots" on public.appointment_slots
   for select using (auth.role() = 'authenticated');
+drop policy if exists "Doctors manage own slots" on public.appointment_slots;
 create policy "Doctors manage own slots" on public.appointment_slots
   for all using (auth.uid() = doctor_id);
+drop policy if exists "Admins manage all slots" on public.appointment_slots;
 create policy "Admins manage all slots" on public.appointment_slots
   for all using (public.current_role() = 'admin');
 
 -- APPOINTMENTS policies
+drop policy if exists "Patients view own appointments" on public.appointments;
 create policy "Patients view own appointments" on public.appointments
   for select using (auth.uid() = patient_id);
+drop policy if exists "Patients create own appointments" on public.appointments;
 create policy "Patients create own appointments" on public.appointments
   for insert with check (auth.uid() = patient_id);
+drop policy if exists "Patients cancel own appointments" on public.appointments;
 create policy "Patients cancel own appointments" on public.appointments
   for update using (auth.uid() = patient_id);
+drop policy if exists "Doctors view own appointments" on public.appointments;
 create policy "Doctors view own appointments" on public.appointments
   for select using (auth.uid() = doctor_id);
+drop policy if exists "Doctors update own appointments" on public.appointments;
 create policy "Doctors update own appointments" on public.appointments
   for update using (auth.uid() = doctor_id);
+drop policy if exists "Admins manage all appointments" on public.appointments;
 create policy "Admins manage all appointments" on public.appointments
   for all using (public.current_role() = 'admin');
-
--- 5. DOCTOR INVITES
-create table if not exists public.doctor_invites (
-  id uuid primary key default gen_random_uuid(),
-  code text not null unique,
-  email text not null,
-  specialty text not null,
-  bio text,
-  consultation_fee numeric(10, 2) default 0,
-  years_experience int default 0,
-  status text not null check (status in ('pending', 'accepted', 'revoked', 'expired')) default 'pending',
-  expires_at timestamptz not null default (now() + interval '7 days'),
-  created_by uuid references public.profiles(id) on delete set null,
-  accepted_by uuid references public.profiles(id) on delete set null,
-  created_at timestamptz default now()
-);
-
-alter table public.doctor_invites enable row level security;
-
-create policy "Admins manage all doctor_invites" on public.doctor_invites
-  for all using (public.current_role() = 'admin');
-
-create policy "Anyone authenticated can check invite code" on public.doctor_invites
-  for select using (auth.role() = 'authenticated');
-
-create or replace function public.claim_doctor_invite(p_code text)
-returns json as $$
-declare
-  v_invite record;
-  v_uid uuid;
-begin
-  v_uid := auth.uid();
-  if v_uid is null then
-    return json_build_object('success', false, 'message', 'Not authenticated');
-  end if;
-
-  select * into v_invite from public.doctor_invites
-  where upper(trim(code)) = upper(trim(p_code))
-  limit 1;
-
-  if v_invite.id is null then
-    return json_build_object('success', false, 'message', 'Invalid invite code.');
-  end if;
-
-  if v_invite.status <> 'pending' then
-    return json_build_object('success', false, 'message', 'Invite code has already been ' || v_invite.status || '.');
-  end if;
-
-  if v_invite.expires_at < now() then
-    update public.doctor_invites set status = 'expired' where id = v_invite.id;
-    return json_build_object('success', false, 'message', 'This invite code has expired.');
-  end if;
-
-  update public.profiles
-  set role = 'doctor'
-  where id = v_uid;
-
-  insert into public.doctors (id, specialty, bio, consultation_fee, years_experience, is_active)
-  values (
-    v_uid,
-    v_invite.specialty,
-    v_invite.bio,
-    coalesce(v_invite.consultation_fee, 0),
-    coalesce(v_invite.years_experience, 0),
-    true
-  )
-  on conflict (id) do update
-  set specialty = excluded.specialty,
-      bio = excluded.bio,
-      consultation_fee = excluded.consultation_fee,
-      years_experience = excluded.years_experience,
-      is_active = true;
-
-  update public.doctor_invites
-  set status = 'accepted',
-      accepted_by = v_uid
-  where id = v_invite.id;
-
-  return json_build_object('success', true, 'message', 'Doctor profile activated successfully.');
-end;
-$$ language plpgsql security definer;

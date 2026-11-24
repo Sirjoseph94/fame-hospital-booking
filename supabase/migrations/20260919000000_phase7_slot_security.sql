@@ -1,5 +1,5 @@
 -- Phase 7 — post-pilot slot hold security (I-21, I-22) + admin audit log
--- Run after 20260918_blackout_delete_policy.sql
+-- Runs after 20260918000100_blackout_delete_policy.sql
 
 -- ---------------------------------------------------------------------------
 -- Admin audit log (invite create/revoke, profile activate/deactivate)
@@ -19,6 +19,7 @@ create index if not exists admin_audit_log_created_at_idx
 
 alter table public.admin_audit_log enable row level security;
 
+drop policy if exists "Admins read audit log" on public.admin_audit_log;
 create policy "Admins read audit log" on public.admin_audit_log
   for select using (public.current_role() = 'admin');
 

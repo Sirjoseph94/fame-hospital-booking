@@ -11,6 +11,7 @@ create table if not exists public.notification_preferences (
 
 alter table public.notification_preferences enable row level security;
 
+drop policy if exists "Users manage own notification preferences" on public.notification_preferences;
 create policy "Users manage own notification preferences"
   on public.notification_preferences
   for all
@@ -33,6 +34,7 @@ create index if not exists push_device_tokens_user_idx
 
 alter table public.push_device_tokens enable row level security;
 
+drop policy if exists "Users manage own push tokens" on public.push_device_tokens;
 create policy "Users manage own push tokens"
   on public.push_device_tokens
   for all
@@ -60,6 +62,7 @@ create index if not exists notification_deliveries_pending_idx
 
 alter table public.notification_deliveries enable row level security;
 
+drop policy if exists "Recipients view own notification deliveries" on public.notification_deliveries;
 create policy "Recipients view own notification deliveries"
   on public.notification_deliveries
   for select

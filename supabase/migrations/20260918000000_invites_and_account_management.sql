@@ -26,10 +26,12 @@ create table if not exists public.doctor_invites (
 alter table public.doctor_invites enable row level security;
 
 -- Admin can do everything on doctor_invites
+drop policy if exists "Admins manage all doctor_invites" on public.doctor_invites;
 create policy "Admins manage all doctor_invites" on public.doctor_invites
   for all using (public.current_role() = 'admin');
 
 -- Authenticated users or signups can verify an invite by code
+drop policy if exists "Anyone authenticated can check invite code" on public.doctor_invites;
 create policy "Anyone authenticated can check invite code" on public.doctor_invites
   for select using (auth.role() = 'authenticated');
 

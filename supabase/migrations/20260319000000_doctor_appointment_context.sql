@@ -1,5 +1,6 @@
 -- Doctors can read patient/beneficiary context for appointments on their schedule.
 
+drop policy if exists "Doctors view appointment holder profiles" on public.profiles;
 create policy "Doctors view appointment holder profiles" on public.profiles
   for select using (
     exists (
@@ -12,6 +13,7 @@ create policy "Doctors view appointment holder profiles" on public.profiles
     )
   );
 
+drop policy if exists "Doctors view appointment beneficiaries" on public.beneficiaries;
 create policy "Doctors view appointment beneficiaries" on public.beneficiaries
   for select using (
     exists (
