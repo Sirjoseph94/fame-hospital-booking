@@ -1,37 +1,17 @@
-import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 
 import { AdminDoctorHeader } from "@/components/admin/admin-doctor-header";
 import { BlackoutManager } from "@/components/blackout/blackout-manager";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
-import { schedulingService } from "@/lib/services/scheduling";
-import type { DoctorDetail } from "@/types/scheduling";
+import { useDoctor } from "@/lib/queries/doctors";
 
 export default function AdminDoctorBlackoutScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [doctor, setDoctor] = useState<DoctorDetail | null>(null);
-
   // Header only; the blackout list loads (and reports errors) independently.
-  useEffect(() => {
-    if (!id) {
-      return;
-    }
-    let cancelled = false;
-    schedulingService
-      .getDoctor(id)
-      .then((detail) => {
-        if (!cancelled) {
-          setDoctor(detail);
-        }
-      })
-      .catch(() => {
-        // Header falls back to "Doctor".
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+  // While loading or if it fails, the header falls back to "Doctor".
+  const doctorQuery = useDoctor(id || undefined);
+  const doctor = doctorQuery.data ?? null;
 
   return (
     <View className="flex-1 bg-surface-muted">

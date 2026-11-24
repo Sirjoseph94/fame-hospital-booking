@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   RefreshControl,
   ScrollView,
@@ -16,71 +16,68 @@ import {
   ScreenLoadingSkeleton,
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
-import { buildCapacityRow, type DoctorCapacityRow } from "@/lib/admin-capacity";
-import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
+import { useSchedulingSettings } from "@/lib/queries/settings";
+import { useCapacity } from "@/lib/queries/slots";
+import { queryKeys } from "@/lib/query/keys";
+import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
+import { SchedulingError } from "@/lib/services/scheduling";
+
+function loadErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load capacity.";
+}
 
 export default function AdminCapacityScreen() {
   const todayYmd = format(new Date(), "yyyy-MM-dd");
-  const [rows, setRows] = useState<DoctorCapacityRow[]>([]);
-  const [bufferMinutes, setBufferMinutes] = useState(15);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [userRefreshing, setUserRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
-    setError(null);
+  const capacityQuery = useCapacity(todayYmd);
+  const settingsQuery = useSchedulingSettings();
+  useRefreshOnFocus([queryKeys.slots.capacityDay(todayYmd), queryKeys.settings]);
+
+  const queries = [capacityQuery, settingsQuery];
+  const isPending = queries.some((query) => query.isPending);
+  // Nothing to show yet: a failed first load replaces the screen.
+  const blockingError = queries.find((query) => query.isError && !query.data)?.error;
+  // A failed refresh keeps the data already shown.
+  const refreshError = queries.find((query) => query.isError && query.data)?.error;
+
+  const rows = capacityQuery.data ?? [];
+  const bufferMinutes = settingsQuery.data?.bufferMinutes ?? 15;
+
+  const refresh = async () => {
+    setUserRefreshing(true);
     try {
-      const [doctors, settings] = await Promise.all([
-        schedulingService.listDoctors(),
-        schedulingService.getSettings(),
-      ]);
-      setBufferMinutes(settings.bufferMinutes);
-
-      // One round trip for every doctor's slots (was ~4 requests per doctor).
-      const slotsByDoctor = await schedulingService.listSlotsOnDateForDoctors(
-        doctors.map((doctor) => doctor.id),
-        todayYmd,
-      );
-      const capacityRows = doctors.map((doctor) =>
-        buildCapacityRow(doctor, slotsByDoctor.get(doctor.id) ?? []),
-      );
-
-      setRows(
-        capacityRows.sort((left, right) =>
-          left.doctorName.localeCompare(right.doctorName),
-        ),
-      );
-    } catch (cause) {
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load capacity.",
-      );
+      await Promise.all([capacityQuery.refetch(), settingsQuery.refetch()]);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setUserRefreshing(false);
     }
-  }, [todayYmd]);
+  };
 
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  const retry = () => {
+    for (const query of queries) {
+      if (query.isError) {
+        void query.refetch();
+      }
+    }
+  };
 
   return (
     <View className="flex-1 bg-surface-muted">
       <ShellHeader title="Capacity" />
 
-      {loading ? (
+      {isPending ? (
         <ScreenLoadingSkeleton>
           <VisitListSkeleton count={4} />
         </ScreenLoadingSkeleton>
-      ) : error ? (
+      ) : blockingError ? (
         <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
+          <SchedulingStatePanel
+            message={loadErrorMessage(blockingError)}
+            onRetry={retry}
+          />
         </View>
       ) : (
         <ScrollView
@@ -88,14 +85,15 @@ export default function AdminCapacityScreen() {
           contentInsetAdjustmentBehavior="automatic"
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                setRefreshing(true);
-                void load();
-              }}
+              refreshing={userRefreshing}
+              onRefresh={() => void refresh()}
             />
           }
         >
+          <RefreshErrorNotice
+            message={refreshError ? loadErrorMessage(refreshError) : null}
+          />
+
           <Card style={{ gap: 8 }}>
             <Text className="text-base font-semibold text-ink">Today</Text>
             <Text className="text-sm text-ink-muted" selectable>

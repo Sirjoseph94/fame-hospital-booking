@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
@@ -16,7 +16,8 @@ import {
   startOfWeek,
   subDays,
 } from "date-fns";
-import { router, useFocusEffect } from "expo-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { router } from "expo-router";
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
 
 import { ConfirmVisitSheet } from "@/components/doctor/confirm-visit-sheet";
@@ -30,7 +31,9 @@ import {
   ScreenLoadingSkeleton,
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { confirmAsync, showAlert } from "@/lib/confirm";
+import { useHasLoadedOnce } from "@/lib/hooks/use-has-loaded-once";
 import { useNow } from "@/lib/hooks/use-now";
 import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
@@ -41,30 +44,36 @@ import {
   type DoctorAgendaVisit,
 } from "@/lib/doctor-agenda-helpers";
 import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+  useCancelAppointment,
+  useCompleteDoctorAppointment,
+  useConfirmDoctorAppointment,
+  useDoctorAgenda,
+} from "@/lib/queries/appointments";
+import { useSchedulingSettings } from "@/lib/queries/settings";
+import { queryKeys } from "@/lib/query/keys";
+import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
+import { SchedulingError } from "@/lib/services/scheduling";
 import { useSessionStore } from "@/lib/stores/session";
 import { colors } from "@/lib/theme-colors";
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load your agenda.";
+}
 
 export default function DoctorAgendaScreen() {
   const session = useSessionStore((state) => state.session);
   const userId = session?.userId;
+  const queryClient = useQueryClient();
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
-  const [visits, setVisits] = useState<DoctorAgendaVisit[]>([]);
-  const [bufferMinutes, setBufferMinutes] = useState(15);
-  const [loading, setLoading] = useState(true);
-  const [rangeLoading, setRangeLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [userRefreshing, setUserRefreshing] = useState(false);
   const [rescheduleTarget, setRescheduleTarget] =
     useState<DoctorAgendaVisit | null>(null);
-  const [manageBusyId, setManageBusyId] = useState<string | null>(null);
   const [actionBanner, setActionBanner] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<DoctorAgendaVisit | null>(
     null,
   );
-  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
   // Re-render every minute so telehealth join windows stay current.
@@ -80,87 +89,59 @@ export default function DoctorAgendaScreen() {
     endOfWeek(selectedDay, { weekStartsOn: 1 }),
     "yyyy-MM-dd",
   );
-  const loadedWeekRef = useRef<string | null>(null);
-  const requestIdRef = useRef(0);
 
-  const load = useCallback(async () => {
-    if (!userId) {
-      return;
+  const agendaQuery = useDoctorAgenda(userId, weekFromYmd, weekToYmd);
+  const settingsQuery = useSchedulingSettings();
+  const confirmMutation = useConfirmDoctorAppointment();
+  const completeMutation = useCompleteDoctorAppointment();
+  const cancelMutation = useCancelAppointment();
+
+  // Refetch (if stale) every time the tab regains focus.
+  useRefreshOnFocus([
+    queryKeys.appointments.doctorRange(userId ?? "", weekFromYmd, weekToYmd),
+    queryKeys.settings,
+  ]);
+
+  const visits = agendaQuery.data;
+  const bufferMinutes = settingsQuery.data?.bufferMinutes ?? 15;
+  // Full-screen skeleton only for the very first load; a newly selected week
+  // with no cached data shows the inline list skeleton instead.
+  const hasLoadedOnce = useHasLoadedOnce(visits !== undefined);
+  const initialLoading =
+    settingsQuery.isPending || (agendaQuery.isPending && !hasLoadedOnce);
+  const weekLoading = agendaQuery.isPending;
+
+  const blockingError =
+    (agendaQuery.error && !visits ? agendaQuery.error : null) ??
+    (settingsQuery.error && !settingsQuery.data ? settingsQuery.error : null);
+  const refreshError = agendaQuery.error && visits ? agendaQuery.error : null;
+
+  const retry = () => {
+    if (agendaQuery.isError) {
+      void agendaQuery.refetch();
     }
-
-    const requestId = ++requestIdRef.current;
-    const isStale = () => requestId !== requestIdRef.current;
-    if (loadedWeekRef.current !== weekFromYmd) {
-      setRangeLoading(true);
+    if (settingsQuery.isError) {
+      void settingsQuery.refetch();
     }
+  };
 
-    setError(null);
+  const refresh = async () => {
+    setUserRefreshing(true);
     try {
-      const appointments = await schedulingService.listDoctorAppointments(
-        userId,
-        { fromYmd: weekFromYmd, toYmd: weekToYmd },
-      );
-      const [settings, contextById] = await Promise.all([
-        schedulingService.getSettings(),
-        schedulingService.enrichDoctorAgendaVisits(appointments),
-      ]);
-      if (isStale()) {
-        return;
-      }
-
-      setBufferMinutes(settings.bufferMinutes);
-
-      const enriched: DoctorAgendaVisit[] = appointments.flatMap((appointment) => {
-        if (!appointment.startsAt || !appointment.endsAt) {
-          return [];
-        }
-        const context = contextById.get(appointment.id);
-        if (!context) {
-          return [];
-        }
-        return [
-          {
-            ...appointment,
-            startsAt: appointment.startsAt,
-            endsAt: appointment.endsAt,
-            beneficiaryName: context.beneficiaryName,
-            accountHolderName: context.accountHolderName,
-            relationship: context.relationship,
-            proxyTag: context.proxyTag,
-          },
-        ];
-      });
-
-      setVisits(enriched);
-      loadedWeekRef.current = weekFromYmd;
-    } catch (cause) {
-      if (isStale()) {
-        return;
-      }
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load your agenda.",
-      );
+      await Promise.all([agendaQuery.refetch(), settingsQuery.refetch()]);
     } finally {
-      if (!isStale()) {
-        setLoading(false);
-        setRangeLoading(false);
-        setRefreshing(false);
-      }
+      setUserRefreshing(false);
     }
-  }, [userId, weekFromYmd, weekToYmd]);
+  };
 
-  // Runs on first focus and every time the tab regains focus.
-  useFocusEffect(
-    useCallback(() => {
-      const task = setTimeout(() => void load(), 0);
-      return () => clearTimeout(task);
-    }, [load]),
-  );
+  const manageBusyId = completeMutation.isPending
+    ? completeMutation.variables
+    : cancelMutation.isPending
+      ? cancelMutation.variables
+      : null;
 
   const dayVisits = useMemo(
-    () => filterVisitsForDay(visits, selectedDay),
+    () => filterVisitsForDay(visits ?? [], selectedDay),
     [selectedDay, visits],
   );
 
@@ -203,25 +184,24 @@ export default function DoctorAgendaScreen() {
     if (!confirmTarget) {
       return;
     }
-    setConfirmSubmitting(true);
     setConfirmError(null);
     try {
-      await schedulingService.confirmDoctorAppointment(confirmTarget.id, {
-        room: values.room,
-        videoUrl: values.videoUrl,
+      await confirmMutation.mutateAsync({
+        appointmentId: confirmTarget.id,
+        details: {
+          room: values.room,
+          videoUrl: values.videoUrl,
+        },
       });
       setConfirmTarget(null);
       setActionBanner("Appointment confirmed.");
       AccessibilityInfo.announceForAccessibility("Appointment confirmed.");
-      await load();
     } catch (cause) {
       setConfirmError(
         cause instanceof SchedulingError
           ? cause.message
           : "Could not confirm the appointment.",
       );
-    } finally {
-      setConfirmSubmitting(false);
     }
   };
 
@@ -235,21 +215,17 @@ export default function DoctorAgendaScreen() {
     if (!confirmed) {
       return;
     }
-    setManageBusyId(visit.id);
     setActionBanner(null);
     try {
-      await schedulingService.completeDoctorAppointment(visit.id);
+      await completeMutation.mutateAsync(visit.id);
       setActionBanner("Visit marked complete.");
       AccessibilityInfo.announceForAccessibility("Visit marked complete.");
-      await load();
     } catch (cause) {
       const message =
         cause instanceof SchedulingError
           ? cause.message
           : "Could not mark the visit complete.";
       showAlert("Could not complete visit", message);
-    } finally {
-      setManageBusyId(null);
     }
   };
 
@@ -264,21 +240,17 @@ export default function DoctorAgendaScreen() {
     if (!confirmed) {
       return;
     }
-    setManageBusyId(visit.id);
     setActionBanner(null);
     try {
-      await schedulingService.cancelAppointment(visit.id);
+      await cancelMutation.mutateAsync(visit.id);
       setActionBanner("Appointment cancelled.");
       AccessibilityInfo.announceForAccessibility("Appointment cancelled.");
-      await load();
     } catch (cause) {
       const message =
         cause instanceof SchedulingError
           ? cause.message
           : "Could not cancel the appointment.";
       showAlert("Cancel failed", message);
-    } finally {
-      setManageBusyId(null);
     }
   };
 
@@ -387,29 +359,34 @@ export default function DoctorAgendaScreen() {
         </Text>
       ) : null}
 
-      {loading ? (
+      <RefreshErrorNotice
+        className="px-4 pb-2"
+        message={refreshError ? errorMessage(refreshError) : null}
+      />
+
+      {blockingError ? (
+        <View className="flex-1 justify-center px-4">
+          <SchedulingStatePanel
+            message={errorMessage(blockingError)}
+            onRetry={retry}
+          />
+        </View>
+      ) : initialLoading ? (
         <ScreenLoadingSkeleton>
           <VisitListSkeleton count={3} />
         </ScreenLoadingSkeleton>
-      ) : error ? (
-        <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
-        </View>
       ) : (
         <ScrollView
           contentContainerClassName="gap-3 px-4 pb-8"
           contentInsetAdjustmentBehavior="automatic"
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                setRefreshing(true);
-                void load();
-              }}
+              refreshing={userRefreshing}
+              onRefresh={() => void refresh()}
             />
           }
         >
-          {rangeLoading ? (
+          {weekLoading ? (
             <VisitListSkeleton count={3} />
           ) : timeline.length === 0 ? (
             <View className="gap-3">
@@ -444,7 +421,8 @@ export default function DoctorAgendaScreen() {
             })
           )}
 
-          {dayVisits.some((visit) => visit.status === "cancelled") ? (
+          {!weekLoading &&
+          dayVisits.some((visit) => visit.status === "cancelled") ? (
             <View className="gap-3 pt-2">
               <Text className="text-sm font-semibold text-ink-muted">Cancelled</Text>
               {dayVisits
@@ -474,7 +452,13 @@ export default function DoctorAgendaScreen() {
           onRescheduled={() => {
             setActionBanner("Appointment rescheduled.");
             AccessibilityInfo.announceForAccessibility("Appointment rescheduled.");
-            void load();
+            // The reschedule sheet isn't owned by this screen; make sure the
+            // agenda picks up the move without restarting a refetch it may
+            // already have triggered itself.
+            void queryClient.invalidateQueries(
+              { queryKey: queryKeys.appointments.all },
+              { cancelRefetch: false },
+            );
           }}
         />
       ) : null}
@@ -487,7 +471,7 @@ export default function DoctorAgendaScreen() {
           errorMessage={confirmError}
           homeVisitAddress={confirmTarget.address}
           open={Boolean(confirmTarget)}
-          submitting={confirmSubmitting}
+          submitting={confirmMutation.isPending}
           onConfirm={submitConfirmVisit}
           onOpenChange={(open) => {
             if (!open) {

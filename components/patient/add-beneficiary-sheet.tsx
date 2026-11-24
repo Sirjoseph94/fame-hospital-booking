@@ -26,7 +26,8 @@ export type AddBeneficiaryFields = z.infer<typeof schema>;
 interface AddBeneficiarySheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: AddBeneficiaryFields) => Promise<void>;
+  /** Resolve `false` on failure to keep the form draft. */
+  onSubmit: (values: AddBeneficiaryFields) => Promise<boolean | void>;
   submitting: boolean;
   errorMessage: string | null;
 }
@@ -56,8 +57,10 @@ export function AddBeneficiarySheet({
   });
 
   const submit = async (values: AddBeneficiaryFields) => {
-    await onSubmit(values);
-    reset();
+    const saved = await onSubmit(values);
+    if (saved !== false) {
+      reset();
+    }
   };
 
   const dobMaximumDate = new Date();

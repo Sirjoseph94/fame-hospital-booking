@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { format, parseISO } from "date-fns";
 
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { Sheet } from "@/components/ui/sheet";
 import { SlotChip } from "@/components/ui/slot-chip";
 import { SlotGridSkeleton } from "@/components/ui/skeleton";
+import { useRescheduleAppointment } from "@/lib/queries/appointments";
+import { useBookableSlots } from "@/lib/queries/slots";
 import { groupSlotsByDate } from "@/lib/slot-groups";
 import {
   SchedulingError,
   schedulingService,
 } from "@/lib/services/scheduling";
-import type { Slot } from "@/types/scheduling";
 
 interface RescheduleSheetProps {
   open: boolean;
@@ -23,6 +25,12 @@ interface RescheduleSheetProps {
   appointmentId: string;
 }
 
+function slotsErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load alternative times.";
+}
+
 export function RescheduleSheet({
   open,
   onOpenChange,
@@ -32,9 +40,10 @@ export function RescheduleSheet({
   onRescheduled,
   appointmentId,
 }: RescheduleSheetProps) {
-  const [slots, setSlots] = useState<Slot[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Only fetch while the sheet is open; bookable slots are always refetched
+  // when the query (re)activates, since availability is contended.
+  const slotsQuery = useBookableSlots(open ? doctorId : undefined);
+  const rescheduleAppointment = useRescheduleAppointment();
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -42,41 +51,31 @@ export function RescheduleSheet({
     SchedulingError["code"] | null
   >(null);
 
+  const slotRows = slotsQuery.data;
+  const slots = useMemo(
+    () =>
+      (slotRows ?? []).filter(
+        (slot) => slot.status === "available" && slot.id !== currentSlotId,
+      ),
+    [currentSlotId, slotRows],
+  );
   const sections = useMemo(() => groupSlotsByDate(slots), [slots]);
 
-  const loadAlternatives = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const rows = await schedulingService.listSlots(doctorId);
-      setSlots(
-        rows.filter(
-          (slot) =>
-            slot.status === "available" && slot.id !== currentSlotId,
-        ),
-      );
-    } catch (cause) {
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load alternative times.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [currentSlotId, doctorId]);
+  const initialLoading = slotRows === undefined && slotsQuery.isPending;
+  const blockingError =
+    slotsQuery.isError && slotRows === undefined ? slotsQuery.error : null;
+  const refreshError = slotsQuery.isError ? slotsQuery.error : null;
 
   useEffect(() => {
-    if (!open) {
-      const resetTask = setTimeout(() => {
-        setSelectedSlotId(null);
-        setActionError(null);
-      }, 0);
-      return () => clearTimeout(resetTask);
+    if (open) {
+      return;
     }
-    const task = setTimeout(() => void loadAlternatives(), 0);
-    return () => clearTimeout(task);
-  }, [loadAlternatives, open]);
+    const resetTask = setTimeout(() => {
+      setSelectedSlotId(null);
+      setActionError(null);
+    }, 0);
+    return () => clearTimeout(resetTask);
+  }, [open]);
 
   const confirmReschedule = async () => {
     if (!selectedSlotId) {
@@ -86,14 +85,16 @@ export function RescheduleSheet({
     setActionError(null);
     setActionErrorCode(null);
     let heldSlotId: string | null = null;
+    let reachedReschedule = false;
     try {
       const hold = await schedulingService.holdSlot(selectedSlotId);
       heldSlotId = selectedSlotId;
-      await schedulingService.rescheduleAppointment(
+      reachedReschedule = true;
+      await rescheduleAppointment.mutateAsync({
         appointmentId,
-        selectedSlotId,
+        newSlotId: selectedSlotId,
         hold,
-      );
+      });
       heldSlotId = null;
       onRescheduled();
       onOpenChange(false);
@@ -117,7 +118,11 @@ export function RescheduleSheet({
         (cause.code === "SLOT_TAKEN" || cause.code === "HOLD_EXPIRED")
       ) {
         setSelectedSlotId(null);
-        await loadAlternatives();
+        // A failed reschedule already invalidated the slot cache; a failed
+        // hold didn't, so refetch the alternatives here.
+        if (!reachedReschedule) {
+          await slotsQuery.refetch();
+        }
       }
     } finally {
       setSubmitting(false);
@@ -135,13 +140,19 @@ export function RescheduleSheet({
         Pick a new time, then confirm — two taps to move your visit.
       </Text>
 
-      {loading ? (
+      {!blockingError ? (
+        <RefreshErrorNotice
+          message={refreshError ? slotsErrorMessage(refreshError) : null}
+        />
+      ) : null}
+
+      {initialLoading ? (
         <SlotGridSkeleton />
-      ) : error ? (
+      ) : blockingError ? (
         <SchedulingStatePanel
           compact
-          message={error}
-          onRetry={() => void loadAlternatives()}
+          message={slotsErrorMessage(blockingError)}
+          onRetry={() => void slotsQuery.refetch()}
         />
       ) : slots.length === 0 ? (
         <Text className="text-sm text-ink-muted">

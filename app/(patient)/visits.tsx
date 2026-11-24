@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
@@ -9,8 +9,8 @@ import {
 } from "react-native";
 import * as Linking from "expo-linking";
 import { isPast, parseISO } from "date-fns";
-import { useFocusEffect } from "expo-router";
 
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { RescheduleSheet } from "@/components/patient/reschedule-sheet";
 import { VisitCard } from "@/components/ui/visit-card";
 import { Card } from "@/components/ui/card";
@@ -23,13 +23,18 @@ import {
 import { ShellHeader } from "@/components/shell-header";
 import { confirmAsync, showAlert } from "@/lib/confirm";
 import { useNow } from "@/lib/hooks/use-now";
+import {
+  useCancelAppointment,
+  usePatientAppointments,
+} from "@/lib/queries/appointments";
+import { useBeneficiaries } from "@/lib/queries/beneficiaries";
+import { useDoctors } from "@/lib/queries/doctors";
+import { queryKeys } from "@/lib/query/keys";
+import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { telehealthJoinState } from "@/lib/telehealth-join";
 import { useSessionStore } from "@/lib/stores/session";
 import { useVisitStatusSnapshot } from "@/lib/stores/visit-status-snapshot";
-import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+import { SchedulingError } from "@/lib/services/scheduling";
 import type { Appointment, Beneficiary } from "@/types/scheduling";
 
 type VisitsTab = "upcoming" | "past" | "proxy";
@@ -47,18 +52,21 @@ interface EnrichedVisit extends Appointment {
   proxyTag?: string;
 }
 
+function visitsErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load your visits.";
+}
+
 export default function PatientVisitsScreen() {
   const userId = useSessionStore((state) => state.session?.userId);
   const mergeStatuses = useVisitStatusSnapshot((state) => state.mergeStatuses);
   const [activeTab, setActiveTab] = useState<VisitsTab>("upcoming");
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
-  const [doctorsLoaded, setDoctorsLoaded] = useState<
-    Record<string, string>
-  >({});
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const appointmentsQuery = usePatientAppointments(userId);
+  const beneficiariesQuery = useBeneficiaries(userId);
+  const doctorsQuery = useDoctors();
+  const cancelAppointment = useCancelAppointment();
+  const [userRefreshing, setUserRefreshing] = useState(false);
   const [rescheduleTarget, setRescheduleTarget] = useState<EnrichedVisit | null>(
     null,
   );
@@ -66,55 +74,60 @@ export default function PatientVisitsScreen() {
   // Re-render every minute so telehealth join windows stay current.
   useNow(60_000);
 
-  const load = useCallback(async () => {
-    if (!userId) {
+  // Refresh when the tab regains focus (e.g. after booking).
+  useRefreshOnFocus([
+    queryKeys.appointments.patient(userId ?? ""),
+    queryKeys.beneficiaries(userId ?? ""),
+    queryKeys.doctors.list,
+  ]);
+
+  const appointmentRows = appointmentsQuery.data;
+  const beneficiaryRows = beneficiariesQuery.data;
+  const doctorRows = doctorsQuery.data;
+
+  // Announce status changes (e.g. a doctor confirmed a visit) whenever fresh
+  // appointment data arrives.
+  useEffect(() => {
+    if (!appointmentRows) {
       return;
     }
-    setError(null);
-    try {
-      const [appointmentRows, beneficiaryRows, doctorRows] = await Promise.all([
-        schedulingService.listAppointments(userId),
-        schedulingService.listBeneficiaries(userId),
-        schedulingService.listDoctors(),
-      ]);
-      const snapshot: Record<string, Appointment["dbStatus"]> = {};
-      appointmentRows.forEach((row) => {
-        snapshot[row.id] = row.dbStatus;
-      });
-      const announcements = mergeStatuses(snapshot);
-      for (const line of announcements) {
-        AccessibilityInfo.announceForAccessibility(line);
-      }
-
-      setAppointments(appointmentRows);
-      setBeneficiaries(beneficiaryRows);
-      const names: Record<string, string> = {};
-      doctorRows.forEach((doctor) => {
-        names[doctor.id] = doctor.name;
-      });
-      setDoctorsLoaded(names);
-    } catch (cause) {
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load your visits.",
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    const snapshot: Record<string, Appointment["dbStatus"]> = {};
+    appointmentRows.forEach((row) => {
+      snapshot[row.id] = row.dbStatus;
+    });
+    const announcements = mergeStatuses(snapshot);
+    for (const line of announcements) {
+      AccessibilityInfo.announceForAccessibility(line);
     }
-  }, [mergeStatuses, userId]);
+  }, [appointmentRows, mergeStatuses]);
 
-  // Runs on first focus and every time the tab regains focus (e.g. after booking).
-  useFocusEffect(
-    useCallback(() => {
-      const task = setTimeout(() => void load(), 0);
-      return () => clearTimeout(task);
-    }, [load]),
+  const visitQueries = [appointmentsQuery, beneficiariesQuery, doctorsQuery];
+  const initialLoading = visitQueries.some(
+    (query) => query.data === undefined && query.isPending,
   );
+  const blockingError = visitQueries.find(
+    (query) => query.isError && query.data === undefined,
+  )?.error;
+  const refreshError = visitQueries.find((query) => query.isError)?.error;
+  const refetchAll = () =>
+    Promise.all(visitQueries.map((query) => query.refetch()));
+
+  const onPullToRefresh = async () => {
+    setUserRefreshing(true);
+    try {
+      await refetchAll();
+    } finally {
+      setUserRefreshing(false);
+    }
+  };
 
   const enriched = useMemo((): EnrichedVisit[] => {
-    return appointments.flatMap((appointment) => {
+    const beneficiaries = beneficiaryRows ?? [];
+    const doctorNames: Record<string, string> = {};
+    (doctorRows ?? []).forEach((doctor) => {
+      doctorNames[doctor.id] = doctor.name;
+    });
+    return (appointmentRows ?? []).flatMap((appointment) => {
       if (!appointment.startsAt) {
         return [];
       }
@@ -122,7 +135,7 @@ export default function PatientVisitsScreen() {
       const beneficiary = beneficiaries.find(
         (row) => row.id === appointment.beneficiaryId,
       );
-      const doctorName = doctorsLoaded[appointment.doctorId] ?? "Doctor";
+      const doctorName = doctorNames[appointment.doctorId] ?? "Doctor";
 
       const proxyTag =
         beneficiary && beneficiary.relationship !== "self"
@@ -139,7 +152,7 @@ export default function PatientVisitsScreen() {
       };
       return [row];
     });
-  }, [appointments, beneficiaries, doctorsLoaded]);
+  }, [appointmentRows, beneficiaryRows, doctorRows]);
 
   const filtered = useMemo(() => {
     if (activeTab === "upcoming") {
@@ -174,10 +187,9 @@ export default function PatientVisitsScreen() {
       return;
     }
     try {
-      await schedulingService.cancelAppointment(visit.id);
+      await cancelAppointment.mutateAsync(visit.id);
       setCancelBanner("Appointment cancelled.");
       AccessibilityInfo.announceForAccessibility("Appointment cancelled.");
-      await load();
     } catch (cause) {
       const message =
         cause instanceof SchedulingError
@@ -236,13 +248,16 @@ export default function PatientVisitsScreen() {
         })}
       </View>
 
-      {loading ? (
+      {initialLoading ? (
         <ScreenLoadingSkeleton>
           <VisitListSkeleton count={2} />
         </ScreenLoadingSkeleton>
-      ) : error ? (
+      ) : blockingError ? (
         <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
+          <SchedulingStatePanel
+            message={visitsErrorMessage(blockingError)}
+            onRetry={() => void refetchAll()}
+          />
         </View>
       ) : (
         <ScrollView
@@ -250,14 +265,15 @@ export default function PatientVisitsScreen() {
           contentInsetAdjustmentBehavior="automatic"
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                setRefreshing(true);
-                void load();
-              }}
+              refreshing={userRefreshing}
+              onRefresh={() => void onPullToRefresh()}
             />
           }
         >
+          <RefreshErrorNotice
+            message={refreshError ? visitsErrorMessage(refreshError) : null}
+          />
+
           {cancelBanner ? (
             <Card>
               <Text accessibilityLiveRegion="polite" className="text-base text-ink">
@@ -323,6 +339,7 @@ export default function PatientVisitsScreen() {
                         accessibilityLabel={`Cancel visit with ${visit.doctorName}`}
                         accessibilityRole="button"
                         className="min-h-12 flex-1 items-center justify-center rounded-xl border border-ink-muted bg-surface px-3 web:hover:opacity-90"
+                        disabled={cancelAppointment.isPending}
                         onPress={() => void cancelVisit(visit)}
                       >
                         <Text className="font-semibold text-ink">Cancel</Text>
@@ -351,7 +368,6 @@ export default function PatientVisitsScreen() {
           onRescheduled={() => {
             setCancelBanner(null);
             AccessibilityInfo.announceForAccessibility("Visit rescheduled.");
-            void load();
           }}
         />
       ) : null}

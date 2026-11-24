@@ -22,7 +22,8 @@ interface SetupSelfBeneficiarySheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultDisplayName?: string;
-  onSubmit: (values: SetupSelfBeneficiaryFields) => Promise<void>;
+  /** Resolve `false` on failure to keep the form draft. */
+  onSubmit: (values: SetupSelfBeneficiaryFields) => Promise<boolean | void>;
   submitting: boolean;
   errorMessage: string | null;
 }
@@ -59,8 +60,10 @@ export function SetupSelfBeneficiarySheet({
   }, [defaultDisplayName, open, reset]);
 
   const submit = async (values: SetupSelfBeneficiaryFields) => {
-    await onSubmit(values);
-    reset();
+    const saved = await onSubmit(values);
+    if (saved !== false) {
+      reset();
+    }
   };
 
   const dobMaximumDate = new Date();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { RefreshControl, ScrollView, Text, View } from "react-native";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -12,10 +12,9 @@ import {
   CardSkeleton,
   ScreenLoadingSkeleton,
 } from "@/components/ui/skeleton";
-import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
+import { useBlackouts, useSetBlackout } from "@/lib/queries/blackouts";
+import { SchedulingError } from "@/lib/services/scheduling";
 import {
   blackoutFormSchema,
   type BlackoutFormFields,
@@ -45,15 +44,22 @@ interface BlackoutManagerProps {
 
 const DEFAULT_WINDOW = { startTime: "13:00", endTime: "16:00" };
 
+function loadErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load blackout hours.";
+}
+
 /** Create/list/remove one-off blackout windows for a doctor. */
 export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps) {
-  const [blackouts, setBlackouts] = useState<BlackoutRule[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [userRefreshing, setUserRefreshing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const blackoutsQuery = useBlackouts(doctorId);
+  const setBlackout = useSetBlackout();
+  const blackouts = blackoutsQuery.data;
+  const submitting = setBlackout.isPending;
 
   const { control, handleSubmit, reset } = useForm<BlackoutFormFields>({
     resolver: zodResolver(blackoutFormSchema),
@@ -64,42 +70,25 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
     },
   });
 
-  const load = useCallback(async () => {
-    if (!doctorId) {
-      return;
-    }
-
-    setError(null);
+  const refresh = async () => {
+    setUserRefreshing(true);
     try {
-      setBlackouts(await schedulingService.listBlackouts(doctorId));
-    } catch (cause) {
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load blackout hours.",
-      );
+      await blackoutsQuery.refetch();
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setUserRefreshing(false);
     }
-  }, [doctorId]);
-
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  };
 
   const submit = async (values: BlackoutFormFields) => {
     if (!doctorId) {
       return;
     }
 
-    setSubmitting(true);
     setFormError(null);
     setSuccessMessage(null);
 
     try {
-      await schedulingService.setBlackout({
+      await setBlackout.mutateAsync({
         doctorId,
         startsAt: toIsoDateTimeFromForm(values.slotDate, values.startTime),
         endsAt: toIsoDateTimeFromForm(values.slotDate, values.endTime),
@@ -108,19 +97,27 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
       });
       reset({ slotDate: values.slotDate, ...DEFAULT_WINDOW, reason: "" });
       setSuccessMessage(copy.savedMessage);
-      await load();
     } catch (cause) {
       setFormError(
         cause instanceof SchedulingError
           ? cause.message
           : "Could not save blackout.",
       );
-    } finally {
-      setSubmitting(false);
     }
   };
 
-  if (loading) {
+  if (blackoutsQuery.error && !blackouts) {
+    return (
+      <View className="flex-1 justify-center px-4">
+        <SchedulingStatePanel
+          message={loadErrorMessage(blackoutsQuery.error)}
+          onRetry={() => void blackoutsQuery.refetch()}
+        />
+      </View>
+    );
+  }
+
+  if (!blackouts) {
     return (
       <ScreenLoadingSkeleton>
         <View className="gap-4 px-4">
@@ -131,14 +128,6 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
     );
   }
 
-  if (error) {
-    return (
-      <View className="flex-1 justify-center px-4">
-        <SchedulingStatePanel message={error} onRetry={() => void load()} />
-      </View>
-    );
-  }
-
   return (
     <ScrollView
       contentContainerClassName="gap-4 px-4 pb-8 pt-2"
@@ -146,14 +135,15 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
       keyboardShouldPersistTaps="handled"
       refreshControl={
         <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            void load();
-          }}
+          refreshing={userRefreshing}
+          onRefresh={() => void refresh()}
         />
       }
     >
+      <RefreshErrorNotice
+        message={blackoutsQuery.error ? loadErrorMessage(blackoutsQuery.error) : null}
+      />
+
       <BlackoutFormCard
         control={control}
         formError={formError}
@@ -174,10 +164,7 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
               key={rule.id}
               rule={rule}
               setByLabel={rule.setBy === setBy ? copy.ownLabel : copy.otherPartyLabel}
-              onDeleted={() => {
-                setSuccessMessage("Blackout removed.");
-                void load();
-              }}
+              onDeleted={() => setSuccessMessage("Blackout removed.")}
             />
           ))
         )}

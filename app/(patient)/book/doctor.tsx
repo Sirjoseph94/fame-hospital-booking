@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMemo } from "react";
 import {
   FlatList,
   Pressable,
@@ -8,6 +8,7 @@ import {
 import { Stack, router } from "expo-router";
 import { format, parseISO } from "date-fns";
 
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
@@ -15,42 +16,30 @@ import {
   ScreenLoadingSkeleton,
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
+import { useDoctors } from "@/lib/queries/doctors";
 import { useBookingStore } from "@/lib/stores/booking";
 import { useSessionStore } from "@/lib/stores/session";
-import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
-import type { Doctor } from "@/types/scheduling";
+import { SchedulingError } from "@/lib/services/scheduling";
+
+function doctorsErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load doctors.";
+}
 
 export default function BookDoctorScreen() {
   const session = useSessionStore((state) => state.session);
   const setDoctor = useBookingStore((state) => state.setDoctor);
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      const rows = await schedulingService.listDoctors();
-      setDoctors(rows.filter((doctor) => doctor.isAcceptingBookings));
-    } catch (cause) {
-      const message =
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load doctors.";
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  const doctorsQuery = useDoctors();
+  const doctorRows = doctorsQuery.data;
+  const doctors = useMemo(
+    () => (doctorRows ?? []).filter((doctor) => doctor.isAcceptingBookings),
+    [doctorRows],
+  );
+  const initialLoading = doctorRows === undefined && doctorsQuery.isPending;
+  const blockingError =
+    doctorsQuery.isError && doctorRows === undefined ? doctorsQuery.error : null;
+  const refreshError = doctorsQuery.isError ? doctorsQuery.error : null;
 
   if (!session) {
     return null;
@@ -59,13 +48,16 @@ export default function BookDoctorScreen() {
   return (
     <>
       <Stack.Screen options={{ title: "Choose a doctor" }} />
-      {loading ? (
+      {initialLoading ? (
         <ScreenLoadingSkeleton>
           <VisitListSkeleton count={4} />
         </ScreenLoadingSkeleton>
-      ) : error ? (
+      ) : blockingError ? (
         <View className="flex-1 justify-center bg-surface-muted px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
+          <SchedulingStatePanel
+            message={doctorsErrorMessage(blockingError)}
+            onRetry={() => void doctorsQuery.refetch()}
+          />
         </View>
       ) : (
         <FlatList
@@ -74,6 +66,11 @@ export default function BookDoctorScreen() {
           contentInsetAdjustmentBehavior="automatic"
           data={doctors}
           keyExtractor={(item) => item.id}
+          ListHeaderComponent={
+            refreshError ? (
+              <RefreshErrorNotice message={doctorsErrorMessage(refreshError)} />
+            ) : undefined
+          }
           ListEmptyComponent={
             <EmptyState message="No doctors are accepting bookings right now." />
           }

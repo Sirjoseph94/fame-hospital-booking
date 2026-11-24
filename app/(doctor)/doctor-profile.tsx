@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -18,26 +18,51 @@ import { FormTextField } from "@/components/ui/form-text-field";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { CardSkeleton, ScreenLoadingSkeleton } from "@/components/ui/skeleton";
-import { profileService } from "@/lib/services/profile";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
+import {
+  useDoctorProfile,
+  useUpdateDoctorProfile,
+} from "@/lib/queries/profile";
 import { useSessionStore } from "@/lib/stores/session";
 import { doctorProfileSchema } from "@/lib/validation/profile";
 import type { z } from "zod";
 
+function loadErrorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : "Could not load your profile.";
+}
+
 export default function DoctorProfileScreen() {
   const session = useSessionStore((state) => state.session);
   const setSession = useSessionStore((state) => state.setSession);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
-  const [department, setDepartment] = useState("");
+  const userId = session?.userId;
+  const [userRefreshing, setUserRefreshing] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  const profileQuery = useDoctorProfile(userId);
+  const updateProfile = useUpdateDoctorProfile(userId ?? "");
+  const profile = profileQuery.data;
+  const saving = updateProfile.isPending;
+
+  // Server values for the form; react-hook-form resets to them whenever they
+  // change, keeping any fields the user has edited but not saved.
+  const formValues = useMemo(
+    () =>
+      profile
+        ? {
+            fullName: profile.fullName,
+            phone: profile.phone ?? "",
+            specialty: profile.specialty,
+            bio: profile.bio ?? "",
+            yearsExperience: String(profile.yearsExperience),
+            consultationFee: String(profile.consultationFee),
+          }
+        : undefined,
+    [profile],
+  );
 
   const {
     control,
     handleSubmit,
-    reset,
     formState: { errors },
   } = useForm<
     z.input<typeof doctorProfileSchema>,
@@ -53,52 +78,28 @@ export default function DoctorProfileScreen() {
       yearsExperience: "0",
       consultationFee: "0",
     },
+    values: formValues,
+    resetOptions: { keepDirtyValues: true }, // don't wipe unsaved edits on refresh
   });
 
   const phoneValue = useWatch({ control, name: "phone" });
 
-  const userId = session?.userId;
-
-  const load = useCallback(async () => {
-    if (!userId) {
-      return;
-    }
-    setError(null);
+  const refresh = async () => {
+    setUserRefreshing(true);
     try {
-      const profile = await profileService.getDoctorProfile(userId);
-      setEmail(profile.email);
-      setDepartment(profile.department);
-      reset({
-        fullName: profile.fullName,
-        phone: profile.phone ?? "",
-        specialty: profile.specialty,
-        bio: profile.bio ?? "",
-        yearsExperience: String(profile.yearsExperience),
-        consultationFee: String(profile.consultationFee),
-      }, { keepDirtyValues: true }); // don't wipe unsaved edits on refresh
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Could not load your profile.",
-      );
+      await profileQuery.refetch();
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setUserRefreshing(false);
     }
-  }, [reset, userId]);
-
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  };
 
   const save = async (values: z.infer<typeof doctorProfileSchema>) => {
     if (!session) {
       return;
     }
-    setSaving(true);
     setSaveMessage(null);
     try {
-      const updated = await profileService.updateDoctorProfile(session.userId, {
+      const updated = await updateProfile.mutateAsync({
         fullName: values.fullName,
         phone: values.phone || undefined,
         specialty: values.specialty,
@@ -115,48 +116,49 @@ export default function DoctorProfileScreen() {
       setSaveMessage(
         cause instanceof Error ? cause.message : "Could not save profile.",
       );
-    } finally {
-      setSaving(false);
     }
   };
 
   return (
     <View className="flex-1 bg-surface-muted">
       <ShellHeader title="Profile" />
-      {loading ? (
+      {profileQuery.error && !profile ? (
+        <View className="flex-1 justify-center px-4">
+          <SchedulingStatePanel
+            message={loadErrorMessage(profileQuery.error)}
+            onRetry={() => void profileQuery.refetch()}
+          />
+        </View>
+      ) : !profile ? (
         <ScreenLoadingSkeleton>
           <View className="gap-4 px-4">
             <CardSkeleton lines={5} />
           </View>
         </ScreenLoadingSkeleton>
-      ) : error ? (
-        <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
-        </View>
       ) : (
         <ScrollView
           contentContainerClassName="gap-4 px-4 pb-8 pt-2"
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                setRefreshing(true);
-                void load();
-              }}
+              refreshing={userRefreshing}
+              onRefresh={() => void refresh()}
             />
           }
         >
+          <RefreshErrorNotice
+            message={profileQuery.error ? loadErrorMessage(profileQuery.error) : null}
+          />
           <Card style={{ gap: 12 }}>
             <Text className="text-base font-semibold text-ink">Account</Text>
             <View className="gap-1">
               <Text className="text-sm font-medium text-ink">Email</Text>
               <Text className="text-base text-ink-muted" selectable>
-                {email}
+                {profile.email}
               </Text>
             </View>
             <View className="gap-1">
               <Text className="text-sm font-medium text-ink">Department</Text>
-              <Text className="text-base text-ink-muted">{department}</Text>
+              <Text className="text-base text-ink-muted">{profile.department}</Text>
             </View>
             <FormTextField
               compact

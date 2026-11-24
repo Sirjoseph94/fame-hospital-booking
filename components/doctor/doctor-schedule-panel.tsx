@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -27,13 +27,21 @@ import {
   CardSkeleton,
   ScreenLoadingSkeleton,
 } from "@/components/ui/skeleton";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { formatAgendaDayLabel } from "@/lib/doctor-agenda-helpers";
 import { scheduleMinimumDate } from "@/lib/scheduling-dates";
 import { formatSchedulingTimeRange } from "@/lib/format-scheduling-time";
+import { useHasLoadedOnce } from "@/lib/hooks/use-has-loaded-once";
 import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+  useDoctor,
+  useSetDoctorAcceptingBookings,
+} from "@/lib/queries/doctors";
+import {
+  useCreateAvailabilitySlot,
+  useRemoveAvailabilitySlot,
+  useScheduleSlots,
+} from "@/lib/queries/slots";
+import { SchedulingError } from "@/lib/services/scheduling";
 import {
   availabilitySlotFormSchema,
   type AvailabilitySlotFormFields,
@@ -59,6 +67,12 @@ function slotStatusLabel(status: SlotStatus): string {
   return "Blocked";
 }
 
+function loadErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load schedule.";
+}
+
 function slotEndIso(slot: Slot): string {
   return addMinutes(parseISO(slot.startsAt), slot.durationMin).toISOString();
 }
@@ -68,20 +82,41 @@ export function DoctorSchedulePanel({
   intro,
 }: DoctorSchedulePanelProps) {
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
-  const [slots, setSlots] = useState<Slot[]>([]);
-  const [acceptingBookings, setAcceptingBookings] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [userRefreshing, setUserRefreshing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [toggleBusy, setToggleBusy] = useState(false);
-  const [removingSlotId, setRemovingSlotId] = useState<string | null>(null);
 
   const dayYmd = format(selectedDay, "yyyy-MM-dd");
   const earliestDay = scheduleMinimumDate();
   const canGoToPreviousDay = isBefore(earliestDay, startOfDay(selectedDay));
+
+  const slotsQuery = useScheduleSlots(doctorId, dayYmd);
+  const doctorQuery = useDoctor(doctorId);
+  const createSlot = useCreateAvailabilitySlot();
+  const removeSlotMutation = useRemoveAvailabilitySlot();
+  const setAccepting = useSetDoctorAcceptingBookings(doctorId);
+
+  const slots = slotsQuery.data;
+  const acceptingBookings = doctorQuery.data?.acceptingBookingsFlag ?? true;
+  const submitting = createSlot.isPending;
+  const toggleBusy = setAccepting.isPending;
+  const removingSlotId = removeSlotMutation.isPending
+    ? removeSlotMutation.variables
+    : null;
+
+  // Full-screen skeleton for the first load only; switching to a day with no
+  // cached slots shows an inline skeleton in the slot list.
+  const hasLoadedOnce = useHasLoadedOnce(slots !== undefined);
+  const initialLoading =
+    doctorQuery.isPending || (slotsQuery.isPending && !hasLoadedOnce);
+  const dayLoading = slotsQuery.isPending;
+
+  const blockingError =
+    (doctorQuery.error && !doctorQuery.data ? doctorQuery.error : null) ??
+    (slotsQuery.error && !slots ? slotsQuery.error : null);
+  const refreshError =
+    (doctorQuery.error && doctorQuery.data ? doctorQuery.error : null) ??
+    (slotsQuery.error && slots ? slotsQuery.error : null);
 
   const { control, handleSubmit, reset } = useForm<AvailabilitySlotFormFields>({
     resolver: zodResolver(availabilitySlotFormSchema),
@@ -96,51 +131,23 @@ export function DoctorSchedulePanel({
     reset((values) => ({ ...values, slotDate: dayYmd }));
   }, [dayYmd, reset]);
 
-  // Monotonic request id: responses for a day the user has already navigated
-  // away from are ignored, so a slow earlier request can't overwrite the
-  // current day's slots.
-  const requestIdRef = useRef(0);
-
-  const load = useCallback(async () => {
-    if (!doctorId) {
-      return;
+  const retry = () => {
+    if (doctorQuery.isError) {
+      void doctorQuery.refetch();
     }
+    if (slotsQuery.isError) {
+      void slotsQuery.refetch();
+    }
+  };
 
-    const requestId = ++requestIdRef.current;
-    const isStale = () => requestId !== requestIdRef.current;
-
-    setError(null);
+  const refresh = async () => {
+    setUserRefreshing(true);
     try {
-      const [slotRows, doctor] = await Promise.all([
-        schedulingService.listScheduleSlotsOnDate(doctorId, dayYmd),
-        schedulingService.getDoctor(doctorId),
-      ]);
-      if (isStale()) {
-        return;
-      }
-      setSlots(slotRows);
-      setAcceptingBookings(doctor.acceptingBookingsFlag);
-    } catch (cause) {
-      if (isStale()) {
-        return;
-      }
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load schedule.",
-      );
+      await Promise.all([slotsQuery.refetch(), doctorQuery.refetch()]);
     } finally {
-      if (!isStale()) {
-        setLoading(false);
-        setRefreshing(false);
-      }
+      setUserRefreshing(false);
     }
-  }, [dayYmd, doctorId]);
-
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  };
 
   const shiftDay = (delta: number) => {
     setSelectedDay((current) => {
@@ -153,11 +160,10 @@ export function DoctorSchedulePanel({
   };
 
   const submitSlot = async (values: AvailabilitySlotFormFields) => {
-    setSubmitting(true);
     setFormError(null);
     setSuccessMessage(null);
     try {
-      await schedulingService.createAvailabilitySlot({
+      await createSlot.mutateAsync({
         doctorId,
         slotDate: values.slotDate,
         startTime: values.startTime,
@@ -169,66 +175,62 @@ export function DoctorSchedulePanel({
         startTime: "09:00",
         endTime: "09:30",
       });
-      await load();
     } catch (cause) {
       setFormError(
         cause instanceof SchedulingError
           ? cause.message
           : "Could not add slot.",
       );
-    } finally {
-      setSubmitting(false);
     }
   };
 
   const toggleAccepting = async () => {
-    setToggleBusy(true);
     try {
-      const next = !acceptingBookings;
-      const doctor = await schedulingService.setDoctorAcceptingBookings(
-        doctorId,
-        next,
-      );
-      setAcceptingBookings(doctor.acceptingBookingsFlag);
+      await setAccepting.mutateAsync(!acceptingBookings);
     } catch (cause) {
       setFormError(
         cause instanceof SchedulingError
           ? cause.message
           : "Could not update booking availability.",
       );
-    } finally {
-      setToggleBusy(false);
     }
   };
 
   const removeSlot = async (slotId: string) => {
-    setRemovingSlotId(slotId);
     setFormError(null);
     try {
-      await schedulingService.removeAvailabilitySlot(slotId);
+      await removeSlotMutation.mutateAsync(slotId);
       setSuccessMessage("Slot removed.");
-      await load();
     } catch (cause) {
       setFormError(
         cause instanceof SchedulingError
           ? cause.message
           : "Could not remove slot.",
       );
-    } finally {
-      setRemovingSlotId(null);
     }
   };
 
   const sortedSlots = useMemo(
     () =>
-      [...slots].sort(
+      [...(slots ?? [])].sort(
         (left, right) =>
           parseISO(left.startsAt).getTime() - parseISO(right.startsAt).getTime(),
       ),
     [slots],
   );
 
-  if (loading) {
+  if (blockingError) {
+    return (
+      <View className="flex-1 justify-center px-4">
+        <SchedulingStatePanel
+          message={loadErrorMessage(blockingError)}
+          onRetry={retry}
+        />
+      </View>
+    );
+  }
+
+  if (initialLoading) {
     return (
       <ScreenLoadingSkeleton>
         <View className="gap-4 px-4">
@@ -239,14 +241,6 @@ export function DoctorSchedulePanel({
     );
   }
 
-  if (error) {
-    return (
-      <View className="flex-1 justify-center px-4">
-        <SchedulingStatePanel message={error} onRetry={() => void load()} />
-      </View>
-    );
-  }
-
   return (
     <ScrollView
       contentContainerClassName="gap-4 px-4 pb-8 pt-2"
@@ -254,17 +248,17 @@ export function DoctorSchedulePanel({
       keyboardShouldPersistTaps="handled"
       refreshControl={
         <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            void load();
-          }}
+          refreshing={userRefreshing}
+          onRefresh={() => void refresh()}
         />
       }
     >
       {intro ? (
         <Text className="text-sm text-ink-muted">{intro}</Text>
       ) : null}
+      <RefreshErrorNotice
+        message={refreshError ? loadErrorMessage(refreshError) : null}
+      />
 
       <Card style={{ gap: 12 }}>
         <Text className="text-base font-semibold text-ink">Accepting bookings</Text>
@@ -340,7 +334,9 @@ export function DoctorSchedulePanel({
 
       <View className="gap-3">
         <Text className="text-base font-semibold text-ink">Slots this day</Text>
-        {sortedSlots.length === 0 ? (
+        {dayLoading ? (
+          <CardSkeleton lines={2} />
+        ) : sortedSlots.length === 0 ? (
           <EmptyState message="No slots on this day. Add an open window above." />
         ) : (
           sortedSlots.map((slot) => {

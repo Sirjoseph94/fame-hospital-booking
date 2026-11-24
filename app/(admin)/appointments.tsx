@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -18,22 +18,17 @@ import {
   ScreenLoadingSkeleton,
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { useNow } from "@/lib/hooks/use-now";
+import { useAdminAppointments } from "@/lib/queries/appointments";
+import { queryKeys } from "@/lib/query/keys";
+import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
   SchedulingError,
-  schedulingService,
   type AppointmentListFilter,
 } from "@/lib/services/scheduling";
 import { visitStatusLabel } from "@/lib/visit-status-label";
-import type { Appointment } from "@/types/scheduling";
-
-interface EnrichedAppointment extends Appointment {
-  startsAt: string;
-  beneficiaryName: string;
-  doctorName: string;
-  proxyTag?: string;
-}
 
 type AppointmentFilter = AppointmentListFilter;
 
@@ -44,99 +39,54 @@ const filters: { id: AppointmentFilter; label: string }[] = [
   { id: "confirmed", label: "Confirmed" },
 ];
 
-const PAGE_SIZE = 50;
+function loadErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load appointments.";
+}
 
 export default function AdminAppointmentsScreen() {
-  const [rows, setRows] = useState<EnrichedAppointment[]>([]);
   const [filter, setFilter] = useState<AppointmentFilter>("all");
-  const [hasMore, setHasMore] = useState(false);
-  // Server offset for the next page (rows may skip items without a start time).
-  const [nextOffset, setNextOffset] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [userRefreshing, setUserRefreshing] = useState(false);
   // Re-render every minute so telehealth join windows stay current.
   useNow(60_000);
-  const requestIdRef = useRef(0);
 
-  /** Loads page `offset` for the current filter; offset 0 replaces the list. */
-  const loadPage = useCallback(
-    async (offset: number) => {
-      const requestId = ++requestIdRef.current;
-      const isStale = () => requestId !== requestIdRef.current;
+  // Each filter has its own cache entry, so switching filters never shows
+  // another filter's rows (or a late response for one).
+  const appointmentsQuery = useAdminAppointments(filter);
+  useRefreshOnFocus([queryKeys.appointments.admin(filter)]);
 
-      setError(null);
-      try {
-        const page = await schedulingService.listAppointmentsPage({
-          filter,
-          todayYmd: format(new Date(), "yyyy-MM-dd"),
-          offset,
-          limit: PAGE_SIZE,
-        });
-        const contextById = await schedulingService.enrichDoctorAgendaVisits(
-          page.items,
-        );
-        if (isStale()) {
-          return;
-        }
+  const rows = appointmentsQuery.data?.pages.flatMap((page) => page.rows) ?? [];
+  const { hasNextPage, isFetchingNextPage } = appointmentsQuery;
+  // A failed refresh or "Load more" keeps the rows already shown.
+  const inlineError =
+    appointmentsQuery.isError && appointmentsQuery.data
+      ? loadErrorMessage(appointmentsQuery.error)
+      : null;
 
-        const enriched: EnrichedAppointment[] = page.items.flatMap((appointment) => {
-          if (!appointment.startsAt) {
-            return [];
-          }
-          const context = contextById.get(appointment.id);
-          return [
-            {
-              ...appointment,
-              startsAt: appointment.startsAt,
-              beneficiaryName: context?.beneficiaryName ?? "Patient",
-              proxyTag: context?.proxyTag,
-            },
-          ];
-        });
-
-        setRows((previous) => (offset === 0 ? enriched : [...previous, ...enriched]));
-        setHasMore(page.hasMore);
-        setNextOffset(offset + page.items.length);
-      } catch (cause) {
-        if (isStale()) {
-          return;
-        }
-        setError(
-          cause instanceof SchedulingError
-            ? cause.message
-            : "Could not load appointments.",
-        );
-      } finally {
-        if (!isStale()) {
-          setLoading(false);
-          setLoadingMore(false);
-          setRefreshing(false);
-        }
-      }
-    },
-    [filter],
-  );
-
-  const load = useCallback(() => loadPage(0), [loadPage]);
-
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  const refresh = async () => {
+    setUserRefreshing(true);
+    try {
+      await appointmentsQuery.refetch();
+    } finally {
+      setUserRefreshing(false);
+    }
+  };
 
   return (
     <View className="flex-1 bg-surface-muted">
       <ShellHeader title="Appointments" />
 
-      {loading ? (
+      {appointmentsQuery.isPending ? (
         <ScreenLoadingSkeleton>
           <VisitListSkeleton count={4} />
         </ScreenLoadingSkeleton>
-      ) : error ? (
+      ) : appointmentsQuery.isError && !appointmentsQuery.data ? (
         <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
+          <SchedulingStatePanel
+            message={loadErrorMessage(appointmentsQuery.error)}
+            onRetry={() => void appointmentsQuery.refetch()}
+          />
         </View>
       ) : (
         <ScrollView
@@ -144,11 +94,8 @@ export default function AdminAppointmentsScreen() {
           contentInsetAdjustmentBehavior="automatic"
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                setRefreshing(true);
-                void load();
-              }}
+              refreshing={userRefreshing}
+              onRefresh={() => void refresh()}
             />
           }
         >
@@ -166,7 +113,6 @@ export default function AdminAppointmentsScreen() {
                   }`}
                   onPress={() => {
                     if (option.id !== filter) {
-                      setLoading(true);
                       setFilter(option.id);
                     }
                   }}
@@ -182,6 +128,8 @@ export default function AdminAppointmentsScreen() {
               );
             })}
           </View>
+
+          <RefreshErrorNotice message={inlineError} />
 
           {rows.length === 0 ? (
             <EmptyState message="No appointments match this filter." />
@@ -239,20 +187,17 @@ export default function AdminAppointmentsScreen() {
             })
           )}
 
-          {hasMore ? (
+          {hasNextPage ? (
             <Pressable
               accessibilityLabel="Load more appointments"
               accessibilityRole="button"
-              accessibilityState={{ busy: loadingMore }}
+              accessibilityState={{ busy: isFetchingNextPage }}
               className="min-h-12 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
-              disabled={loadingMore}
-              onPress={() => {
-                setLoadingMore(true);
-                void loadPage(nextOffset);
-              }}
+              disabled={isFetchingNextPage}
+              onPress={() => void appointmentsQuery.fetchNextPage()}
             >
               <Text className="font-semibold text-primary">
-                {loadingMore ? "Loading…" : "Load more"}
+                {isFetchingNextPage ? "Loading…" : "Load more"}
               </Text>
             </Pressable>
           ) : null}

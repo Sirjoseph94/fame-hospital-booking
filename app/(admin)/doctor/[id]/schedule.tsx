@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
 import { View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 
@@ -6,56 +5,45 @@ import { AdminDoctorHeader } from "@/components/admin/admin-doctor-header";
 import { DoctorSchedulePanel } from "@/components/doctor/doctor-schedule-panel";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { ScreenLoadingSkeleton } from "@/components/ui/skeleton";
-import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
-import type { DoctorDetail } from "@/types/scheduling";
+import { useDoctor } from "@/lib/queries/doctors";
+import { SchedulingError } from "@/lib/services/scheduling";
 
 export default function AdminDoctorScheduleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const doctorId = id ?? "";
 
-  const [doctor, setDoctor] = useState<DoctorDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const doctorQuery = useDoctor(doctorId || undefined);
+  const doctor = doctorQuery.data ?? null;
 
-  const load = useCallback(async () => {
-    if (!doctorId) {
-      setError("Missing doctor.");
-      setLoading(false);
-      return;
-    }
-
-    setError(null);
-    try {
-      setDoctor(await schedulingService.getDoctor(doctorId));
-    } catch (cause) {
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load doctor.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [doctorId]);
-
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  let error: string | null = null;
+  if (!doctorId) {
+    error = "Missing doctor.";
+  } else if (doctorQuery.isError && !doctorQuery.data) {
+    error =
+      doctorQuery.error instanceof SchedulingError
+        ? doctorQuery.error.message
+        : "Could not load doctor.";
+  }
 
   return (
     <View className="flex-1 bg-surface-muted">
       <AdminDoctorHeader doctor={doctor} subtitle="Manage schedule" />
 
-      {loading ? (
-        <ScreenLoadingSkeleton />
-      ) : error ? (
+      {error ? (
         <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
+          <SchedulingStatePanel
+            message={error}
+            onRetry={() => {
+              // A disabled query would still fetch on refetch(); there's no
+              // doctor to load without an id.
+              if (doctorId) {
+                void doctorQuery.refetch();
+              }
+            }}
+          />
         </View>
+      ) : doctorQuery.isPending ? (
+        <ScreenLoadingSkeleton />
       ) : (
         <DoctorSchedulePanel
           doctorId={doctorId}

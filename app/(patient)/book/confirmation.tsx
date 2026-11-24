@@ -12,6 +12,8 @@ import { format, parseISO } from "date-fns";
 import QRCode from "react-native-qrcode-svg";
 
 import { Card } from "@/components/ui/card";
+import { useConfirmBooking } from "@/lib/queries/appointments";
+import { useBeneficiaries } from "@/lib/queries/beneficiaries";
 import { exportAppointmentToCalendar } from "@/lib/services/calendarExport";
 import { useBookingStore } from "@/lib/stores/booking";
 import { useSessionStore } from "@/lib/stores/session";
@@ -19,7 +21,6 @@ import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import {
   SchedulingError,
   type SchedulingErrorCode,
-  schedulingService,
 } from "@/lib/services/scheduling";
 import type { Appointment } from "@/types/scheduling";
 import { colors } from "@/lib/theme-colors";
@@ -29,12 +30,18 @@ export default function BookConfirmationScreen() {
   const draft = useBookingStore();
   const resetBookingDraft = useBookingStore((state) => state.resetBookingDraft);
 
-  const [submitting, setSubmitting] = useState(false);
+  const confirmBooking = useConfirmBooking();
+  const submitting = confirmBooking.isPending;
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<SchedulingErrorCode | null>(null);
   const [confirmed, setConfirmed] = useState<Appointment | null>(null);
   const [calendarMessage, setCalendarMessage] = useState<string | null>(null);
-  const [beneficiaryName, setBeneficiaryName] = useState<string | null>(null);
+  const beneficiariesQuery = useBeneficiaries(
+    draft.beneficiaryId ? session?.userId : undefined,
+  );
+  const beneficiaryName =
+    beneficiariesQuery.data?.find((row) => row.id === draft.beneficiaryId)
+      ?.displayName ?? null;
 
   useEffect(() => {
     if (!draft.slotId || !draft.hold || !draft.doctorId || !draft.beneficiaryId) {
@@ -42,30 +49,6 @@ export default function BookConfirmationScreen() {
       return () => clearTimeout(task);
     }
   }, [draft.beneficiaryId, draft.doctorId, draft.hold, draft.slotId]);
-
-  useEffect(() => {
-    if (!session?.userId || !draft.beneficiaryId) {
-      return;
-    }
-    let cancelled = false;
-    void schedulingService
-      .listBeneficiaries(session.userId)
-      .then((rows) => {
-        if (cancelled) {
-          return;
-        }
-        const match = rows.find((row) => row.id === draft.beneficiaryId);
-        setBeneficiaryName(match?.displayName ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setBeneficiaryName(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [draft.beneficiaryId, session?.userId]);
 
   const confirm = async () => {
     if (
@@ -79,11 +62,13 @@ export default function BookConfirmationScreen() {
       return;
     }
 
-    setSubmitting(true);
+    if (confirmBooking.isPending) {
+      return;
+    }
     setError(null);
     setErrorCode(null);
     try {
-      const appointment = await schedulingService.confirmBooking({
+      const appointment = await confirmBooking.mutateAsync({
         accountHolderId: session.userId,
         beneficiaryId: draft.beneficiaryId,
         doctorId: draft.doctorId,
@@ -107,8 +92,6 @@ export default function BookConfirmationScreen() {
       setError(message);
       setErrorCode(cause instanceof SchedulingError ? cause.code : null);
       AccessibilityInfo.announceForAccessibility(message);
-    } finally {
-      setSubmitting(false);
     }
   };
 
