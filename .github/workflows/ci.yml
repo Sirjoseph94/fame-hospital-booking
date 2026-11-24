@@ -21,6 +21,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      # Every platform's native binaries must be in the lockfile, or EAS Linux
+      # builds fail (e.g. lightningcss.linux-x64-gnu.node). No install needed.
+      - name: Lockfile includes all platform binaries
+        run: node scripts/check-lockfile.mjs
+
       # Match the npm version EAS uses (see packageManager in package.json).
       - run: npm install -g npm@10.9.2
       - run: npm ci

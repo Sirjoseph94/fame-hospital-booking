@@ -418,6 +418,18 @@ Server secrets (`NOTIFICATION_WEBHOOK_SECRET`, Resend, Twilio) are **Supabase Ed
 
 Migrations (§2, `npm run db:push`) and the Edge Function (§12) are deployed by hand, **before** the app build or update that depends on them. This is deliberate: a bad migration can't be undone with a rollback.
 
+### Dependencies and the lockfile (EAS runs on Linux)
+
+EAS Android builds and web deploys run on **Linux x64**, and iOS builds on macOS. Several packages ship a native binary per platform (lightningcss for NativeWind, Expo's noxcturnal, @parcel/watcher, the ESLint resolver), so `package-lock.json` must list **every** platform's binary. npm 10 silently drops other platforms' binaries when you `npm install <pkg>` with `node_modules` present. Your Mac keeps working, and EAS fails with errors like `Cannot find module '../lightningcss.linux-x64-gnu.node'`.
+
+| Command | When |
+|---|---|
+| `npm run check:lockfile` | After any dependency change (≈1 s). Also runs in CI and as EAS's `eas-build-pre-install` hook, so a bad lockfile fails fast with this message |
+| `npm run lock:regen` | When the check fails: rebuilds the lockfile in a clean directory with npm 10.9.2, verifies it, and reinstalls with `npm ci` |
+| `npm run check:linux` | Before pushing dependency changes: clean `npm ci` + metro config + web export in a `linux/amd64` Docker container (the EAS/CI environment) |
+
+You can't give EAS Build a Dockerfile; it uses Expo's build images (selectable with `image` in `eas.json`). Docker is for **reproducing** that Linux environment locally (`check:linux`).
+
 ### Rolling back
 
 - **OTA update:** `npx eas-cli update:republish --channel production` (choose the previous update group), or roll back in expo.dev → Updates.

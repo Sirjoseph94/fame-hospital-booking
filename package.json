@@ -17,7 +17,11 @@
     "db:push": "bash scripts/db.sh push",
     "db:baseline": "bash scripts/db.sh baseline",
     "db:new": "bash scripts/db.sh new",
-    "db:test": "bash scripts/db.sh test"
+    "db:test": "bash scripts/db.sh test",
+    "check:lockfile": "node scripts/check-lockfile.mjs",
+    "check:linux": "bash scripts/check-linux.sh",
+    "lock:regen": "bash scripts/regen-lockfile.sh",
+    "eas-build-pre-install": "node scripts/check-lockfile.mjs"
   },
   "dependencies": {
     "@expo/metro-runtime": "~58.0.17",
