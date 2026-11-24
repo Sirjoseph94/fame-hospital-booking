@@ -70,5 +70,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      # --frozen: fail if deno.lock doesn't match (pinned esm.sh dependencies).
       - name: Typecheck Edge Functions
-        run: deno check supabase/functions/dispatch-notifications/index.ts
+        working-directory: supabase/functions/dispatch-notifications
+        run: deno check --frozen index.ts

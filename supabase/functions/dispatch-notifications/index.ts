@@ -1,7 +1,7 @@
 import {
   createClient,
   type SupabaseClient,
-} from "https://esm.sh/@supabase/supabase-js@2.45.4";
+} from "@supabase/supabase-js"; // version pinned in ./deno.json + deno.lock
 
 /** Service-role client (untyped schema: rows are plain records). */
 type Db = SupabaseClient;

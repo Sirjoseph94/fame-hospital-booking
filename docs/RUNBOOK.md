@@ -285,6 +285,8 @@ supabase functions deploy dispatch-notifications --no-verify-jwt
 
 Generate one with `openssl rand -hex 32`.
 
+**Dependencies:** the function runs on Deno, not Node, so it doesn't use `package.json`. Its imports are pinned in `supabase/functions/dispatch-notifications/deno.json` (import map) and `deno.lock` (content hashes). To bump `@supabase/supabase-js`, edit the URL in `deno.json`, then run `deno check index.ts` in that folder to refresh `deno.lock`, and commit both. CI runs `deno check --frozen`, which fails if the lockfile is out of date.
+
 Set secrets (Dashboard → Edge Functions → Secrets, or CLI):
 
 | Secret | Purpose |
