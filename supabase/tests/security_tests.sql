@@ -246,4 +246,98 @@ do $$ begin
   exception when unique_violation then raise notice 'PASS: second active appointment on same slot rejected'; end;
 end $$;
 
+-- ---------------------------------------------------------------- doctor_next_available_slots view
+-- Explicit state: slot 1 (09:00) booked, slot 2 (09:30) available.
+update public.appointment_slots set status = 'booked' where id = '00000000-0000-0000-0000-00000000c001';
+update public.appointment_slots set status = 'available' where id = '00000000-0000-0000-0000-00000000c002';
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((select count(*) from public.doctor_next_available_slots) = 1, 'next-available view: one row per doctor');
+select t.ok((select start_time from public.doctor_next_available_slots
+             where doctor_id = '00000000-0000-0000-0000-0000000000d1') = '09:30',
+  'next-available view skips booked slots and returns the earliest available one');
+reset role;
+set role anon;
+do $$ begin
+  begin
+    perform 1 from public.doctor_next_available_slots;
+    raise exception 'FAIL: anon read next-available view';
+  exception when insufficient_privilege then raise notice 'PASS: anon cannot read next-available view'; end;
+end $$;
+reset role;
+
+-- ---------------------------------------------------------------- one "self" beneficiary per account
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+do $$ begin
+  begin
+    insert into public.beneficiaries (account_holder_id, display_name, relationship, dob, gender)
+    values (auth.uid(), 'Pat again', 'self', '1990-01-01', 'female');
+    raise exception 'FAIL: second self beneficiary accepted';
+  exception when unique_violation then raise notice 'PASS: only one "self" beneficiary per account'; end;
+end $$;
+insert into public.beneficiaries (account_holder_id, display_name, relationship, dob, gender)
+values (auth.uid(), 'Kid', 'child', '2015-01-01', 'male');
+select t.ok((select count(*) from public.beneficiaries where account_holder_id = auth.uid()) = 2,
+  'other relationships are unaffected');
+reset role;
+
+-- ---------------------------------------------------------------- account deactivation
+-- Admin deactivates Q (through the app's normal path: an authenticated admin update).
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+update public.profiles set is_active = false where id = '00000000-0000-0000-0000-0000000000a2';
+select t.ok((select is_active from public.profiles where id = '00000000-0000-0000-0000-0000000000a2') = false,
+  'admin can deactivate an account');
+
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a2","email":"q@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((select count(*) from public.profiles where id = auth.uid()) = 1,
+  'deactivated user can still read own profile (app shows "deactivated")');
+select t.ok((select count(*) from public.beneficiaries) = 0, 'deactivated user cannot read own beneficiaries');
+select t.ok((select count(*) from public.appointment_slots) = 0, 'deactivated user cannot read slots');
+select t.ok((select count(*) from public.doctors) = 0, 'deactivated user cannot read doctors');
+select t.ok((select count(*) from public.doctor_next_available_slots) = 0, 'deactivated user sees nothing via next-available view');
+do $$ declare n int; begin
+  update public.profiles set full_name = 'Still here' where id = auth.uid();
+  get diagnostics n = row_count;
+  perform t.ok(n = 0, 'deactivated user cannot update own profile');
+end $$;
+do $$ begin
+  begin
+    perform public.hold_slot_if_available('00000000-0000-0000-0000-00000000c002');
+    raise exception 'FAIL: deactivated user took a hold';
+  exception when insufficient_privilege then raise notice 'PASS: deactivated user cannot hold slots'; end;
+  begin
+    perform public.claim_doctor_invite('ANYTHING');
+    raise exception 'FAIL: deactivated user called claim_doctor_invite';
+  exception when insufficient_privilege then raise notice 'PASS: deactivated user cannot claim invites'; end;
+end $$;
+
+-- Deactivated doctor loses doctor powers too.
+reset role;
+update public.profiles set is_active = false where id = '00000000-0000-0000-0000-0000000000d1';
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+do $$ declare n int; begin
+  update public.appointments set status = 'confirmed' where doctor_id = auth.uid();
+  get diagnostics n = row_count;
+  perform t.ok(n = 0, 'deactivated doctor cannot update appointments');
+  insert into public.appointment_slots (doctor_id, slot_date, start_time, end_time)
+  values (auth.uid(), current_date + 3, '11:00', '11:30');
+  raise exception 'FAIL: deactivated doctor created a slot';
+exception when insufficient_privilege then
+  raise notice 'PASS: deactivated doctor cannot create slots';
+end $$;
+
+-- Reactivation restores access.
+reset role;
+update public.profiles set is_active = true
+where id in ('00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-0000000000d1');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a2","email":"q@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((select count(*) from public.beneficiaries) = 1, 'reactivated user regains access');
+reset role;
+
 \echo ALL TESTS PASSED

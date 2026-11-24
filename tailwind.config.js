@@ -1,3 +1,5 @@
+const { colors } = require("./lib/theme-colors");
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   // Required for NativeWind on web (Expo Router syncs color scheme at runtime).
@@ -10,14 +12,8 @@ module.exports = {
   presets: [require("nativewind/preset")],
   theme: {
     extend: {
-      colors: {
-        surface: "#FFFFFF",
-        "surface-muted": "#F8FAFC",
-        ink: "#0F172A",
-        "ink-muted": "#64748B",
-        primary: "#2563EB",
-        available: "#16A34A",
-      },
+      // Defined in lib/theme-colors.js (also used for icon/indicator colours).
+      colors,
     },
   },
   plugins: [],

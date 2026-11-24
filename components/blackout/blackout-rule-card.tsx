@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -8,10 +7,8 @@ import { format, isFuture, parseISO } from "date-fns";
 
 import { Card } from "@/components/ui/card";
 import { confirmAsync, showAlert } from "@/lib/confirm";
-import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+import { useDeleteBlackout } from "@/lib/queries/blackouts";
+import { SchedulingError } from "@/lib/services/scheduling";
 import type { BlackoutRule } from "@/types/scheduling";
 
 interface BlackoutRuleCardProps {
@@ -29,7 +26,8 @@ export function BlackoutRuleCard({
   setByLabel,
   onDeleted,
 }: BlackoutRuleCardProps) {
-  const [deleting, setDeleting] = useState(false);
+  const deleteBlackout = useDeleteBlackout(rule.doctorId);
+  const deleting = deleteBlackout.isPending;
   const canDelete = isFuture(parseISO(rule.endsAt));
 
   const confirmDelete = async () => {
@@ -44,9 +42,8 @@ export function BlackoutRuleCard({
     if (!confirmed) {
       return;
     }
-    setDeleting(true);
     try {
-      await schedulingService.deleteBlackout(rule.id);
+      await deleteBlackout.mutateAsync(rule.id);
       onDeleted();
     } catch (cause) {
       const message =
@@ -54,8 +51,6 @@ export function BlackoutRuleCard({
           ? cause.message
           : "Could not remove blackout.";
       showAlert("Remove failed", message);
-    } finally {
-      setDeleting(false);
     }
   };
 

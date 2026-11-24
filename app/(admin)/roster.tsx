@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -15,11 +15,7 @@ import { FieldError } from "@/components/ui/field-error";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { confirmAsync } from "@/lib/confirm";
 import { copyText } from "@/lib/copy-text";
-import {
-  InviteError,
-  invitesService,
-  type DoctorInvite,
-} from "@/lib/services/invites";
+import { InviteError, type DoctorInvite } from "@/lib/services/invites";
 import { bufferMinutesSchema } from "@/lib/validation/forms";
 import { doctorInviteFormSchema } from "@/lib/validation/invites";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -29,38 +25,58 @@ import {
   ScreenLoadingSkeleton,
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
+import { useDoctorRoster, useSetAccountActive } from "@/lib/queries/doctors";
 import {
-  AccountError,
-  accountsService,
-} from "@/lib/services/accounts";
+  useCreateDoctorInvite,
+  useDoctorInvites,
+  useRevokeDoctorInvite,
+} from "@/lib/queries/invites";
 import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+  useSchedulingSettings,
+  useUpdateBufferMinutes,
+} from "@/lib/queries/settings";
+import { queryKeys } from "@/lib/query/keys";
+import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
+import { AccountError } from "@/lib/services/accounts";
+import { SchedulingError } from "@/lib/services/scheduling";
 import type { RosterDoctor } from "@/types/scheduling";
 
+function loadErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load the doctor roster.";
+}
+
 export default function AdminRosterScreen() {
-  const [doctors, setDoctors] = useState<RosterDoctor[]>([]);
-  const [togglingDoctorId, setTogglingDoctorId] = useState<string | null>(null);
+  const rosterQuery = useDoctorRoster();
+  const settingsQuery = useSchedulingSettings();
+  const invitesQuery = useDoctorInvites();
+  useRefreshOnFocus([
+    queryKeys.doctors.roster,
+    queryKeys.settings,
+    queryKeys.invites,
+  ]);
+
+  const setAccountActive = useSetAccountActive();
+  const updateBufferMinutes = useUpdateBufferMinutes();
+  const createDoctorInvite = useCreateDoctorInvite();
+  const revokeDoctorInvite = useRevokeDoctorInvite();
+
+  const [userRefreshing, setUserRefreshing] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const [bufferMinutes, setBufferMinutes] = useState("15");
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [savingBuffer, setSavingBuffer] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // What the admin has typed; null shows the saved value.
+  const [bufferDraft, setBufferDraft] = useState<string | null>(null);
   const [bufferMessage, setBufferMessage] = useState<string | null>(null);
   const [bufferError, setBufferError] = useState<string | null>(null);
-  const [invites, setInvites] = useState<DoctorInvite[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteSpecialty, setInviteSpecialty] = useState("");
   const [inviteBio, setInviteBio] = useState("");
   const [inviteFee, setInviteFee] = useState("");
   const [inviteYears, setInviteYears] = useState("");
   const [inviteExpiryDays, setInviteExpiryDays] = useState("7");
-  const [creatingInvite, setCreatingInvite] = useState(false);
   const [inviteFormError, setInviteFormError] = useState<string | null>(null);
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
-  const [revokingInviteId, setRevokingInviteId] = useState<string | null>(null);
   const [copiedInviteId, setCopiedInviteId] = useState<string | null>(null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -73,33 +89,44 @@ export default function AdminRosterScreen() {
     [],
   );
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const [doctorRows, settings, pendingInvites] = await Promise.all([
-        schedulingService.listDoctorsForAdmin(),
-        schedulingService.getSettings(),
-        invitesService.listDoctorInvites(),
-      ]);
-      setDoctors(doctorRows);
-      setInvites(pendingInvites);
-      setBufferMinutes(String(settings.bufferMinutes));
-    } catch (cause) {
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load the doctor roster.",
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  const doctors = rosterQuery.data ?? [];
+  const invites = invitesQuery.data ?? [];
+  const bufferMinutes =
+    bufferDraft ?? String(settingsQuery.data?.bufferMinutes ?? 15);
+  const savingBuffer = updateBufferMinutes.isPending;
+  const creatingInvite = createDoctorInvite.isPending;
+  const revokingInviteId = revokeDoctorInvite.isPending
+    ? revokeDoctorInvite.variables
+    : null;
+  const togglingDoctorId = setAccountActive.isPending
+    ? setAccountActive.variables.userId
+    : null;
 
-  useEffect(() => {
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [load]);
+  const queries = [rosterQuery, settingsQuery, invitesQuery];
+  const isPending = queries.some((query) => query.isPending);
+  // Nothing to show yet: a failed first load replaces the screen.
+  const blockingError = queries.find((query) => query.isError && !query.data)?.error;
+  // A failed refresh keeps the data already shown.
+  const refreshError = queries.find((query) => query.isError && query.data)?.error;
+
+  const refresh = async () => {
+    setUserRefreshing(true);
+    // Pull-to-refresh shows the saved buffer again, as before.
+    setBufferDraft(null);
+    try {
+      await Promise.all(queries.map((query) => query.refetch()));
+    } finally {
+      setUserRefreshing(false);
+    }
+  };
+
+  const retry = () => {
+    for (const query of queries) {
+      if (query.isError) {
+        void query.refetch();
+      }
+    }
+  };
 
   const saveBuffer = async () => {
     const parsedNumber = Number.parseInt(bufferMinutes, 10);
@@ -113,12 +140,12 @@ export default function AdminRosterScreen() {
     }
     const parsed = validated.data;
 
-    setSavingBuffer(true);
     setBufferError(null);
     setBufferMessage(null);
     try {
-      const settings = await schedulingService.updateBufferMinutes(parsed);
-      setBufferMinutes(String(settings.bufferMinutes));
+      await updateBufferMinutes.mutateAsync(parsed);
+      // The cache now holds the saved value; show it.
+      setBufferDraft(null);
       setBufferMessage("Buffer updated for all doctors.");
     } catch (cause) {
       setBufferError(
@@ -126,8 +153,6 @@ export default function AdminRosterScreen() {
           ? cause.message
           : "Could not update buffer.",
       );
-    } finally {
-      setSavingBuffer(false);
     }
   };
 
@@ -147,7 +172,6 @@ export default function AdminRosterScreen() {
       return;
     }
 
-    setCreatingInvite(true);
     setInviteFormError(null);
     setInviteMessage(null);
     try {
@@ -158,7 +182,7 @@ export default function AdminRosterScreen() {
         ? Number.parseInt(parsed.data.yearsExperience, 10)
         : 0;
       const expiryDays = Number.parseInt(parsed.data.expiryDays, 10);
-      const invite = await invitesService.createDoctorInvite({
+      const invite = await createDoctorInvite.mutateAsync({
         email: parsed.data.email,
         specialty: parsed.data.specialty,
         bio: parsed.data.bio,
@@ -166,7 +190,6 @@ export default function AdminRosterScreen() {
         yearsExperience: years,
         expiresAt: addDays(new Date(), expiryDays).toISOString(),
       });
-      setInvites((current) => [invite, ...current]);
       setInviteEmail("");
       setInviteSpecialty("");
       setInviteBio("");
@@ -182,8 +205,6 @@ export default function AdminRosterScreen() {
           ? cause.message
           : "Could not create invite.",
       );
-    } finally {
-      setCreatingInvite(false);
     }
   };
 
@@ -197,20 +218,15 @@ export default function AdminRosterScreen() {
     if (!confirmed) {
       return;
     }
-    const inviteId = invite.id;
-    setRevokingInviteId(inviteId);
     setInviteFormError(null);
     try {
-      await invitesService.revokeDoctorInvite(inviteId);
-      setInvites((current) => current.filter((row) => row.id !== inviteId));
+      await revokeDoctorInvite.mutateAsync(invite.id);
     } catch (cause) {
       setInviteFormError(
         cause instanceof InviteError
           ? cause.message
           : "Could not revoke invite.",
       );
-    } finally {
-      setRevokingInviteId(null);
     }
   };
 
@@ -227,20 +243,18 @@ export default function AdminRosterScreen() {
         return;
       }
     }
-    setTogglingDoctorId(doctor.id);
     setToggleError(null);
     try {
-      await accountsService.setProfileActive(doctor.id, nextActive);
-      const doctorRows = await schedulingService.listDoctorsForAdmin();
-      setDoctors(doctorRows);
+      await setAccountActive.mutateAsync({
+        userId: doctor.id,
+        isActive: nextActive,
+      });
     } catch (cause) {
       setToggleError(
         cause instanceof AccountError
           ? cause.message
           : "Could not update account status.",
       );
-    } finally {
-      setTogglingDoctorId(null);
     }
   };
 
@@ -259,14 +273,17 @@ export default function AdminRosterScreen() {
     <View className="flex-1 bg-surface-muted">
       <ShellHeader title="Doctor roster" />
 
-      {loading ? (
+      {isPending ? (
         <ScreenLoadingSkeleton>
           <HomeScreenSkeleton />
           <VisitListSkeleton count={3} />
         </ScreenLoadingSkeleton>
-      ) : error ? (
+      ) : blockingError ? (
         <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel message={error} onRetry={() => void load()} />
+          <SchedulingStatePanel
+            message={loadErrorMessage(blockingError)}
+            onRetry={retry}
+          />
         </View>
       ) : (
         <ScrollView
@@ -274,14 +291,15 @@ export default function AdminRosterScreen() {
           contentInsetAdjustmentBehavior="automatic"
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => {
-                setRefreshing(true);
-                void load();
-              }}
+              refreshing={userRefreshing}
+              onRefresh={() => void refresh()}
             />
           }
         >
+          <RefreshErrorNotice
+            message={refreshError ? loadErrorMessage(refreshError) : null}
+          />
+
           <Card style={{ gap: 12 }}>
             <Text className="text-base font-semibold text-ink">
               Post-visit buffer
@@ -295,7 +313,7 @@ export default function AdminRosterScreen() {
             <FormTextInput
               accessibilityLabel="Buffer minutes"
               kind="number"
-              onChangeText={setBufferMinutes}
+              onChangeText={setBufferDraft}
               value={bufferMinutes}
             />
             <FieldError message={bufferError ?? undefined} />
@@ -439,10 +457,10 @@ export default function AdminRosterScreen() {
                       accessibilityLabel={`Revoke invite for ${invite.email}`}
                       accessibilityRole="button"
                       accessibilityState={{
-                        disabled: revokingInviteId === invite.id,
+                        disabled: revokeDoctorInvite.isPending,
                       }}
                       className="min-h-11 flex-1 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
-                      disabled={revokingInviteId === invite.id}
+                      disabled={revokeDoctorInvite.isPending}
                       onPress={() => void revokeInvite(invite)}
                     >
                       {revokingInviteId === invite.id ? (
@@ -484,7 +502,9 @@ export default function AdminRosterScreen() {
                     </Text>
                     <Text className="text-xs text-ink-muted" selectable>
                       Next open slot:{" "}
-                      {format(parseISO(doctor.nextAvailable), "MMM d · h:mm a")}
+                      {doctor.nextAvailable
+                        ? format(parseISO(doctor.nextAvailable), "MMM d · h:mm a")
+                        : "none"}
                     </Text>
                   </View>
                   <View className="flex-row flex-wrap gap-2">
@@ -496,10 +516,10 @@ export default function AdminRosterScreen() {
                       }
                       accessibilityRole="button"
                       accessibilityState={{
-                        disabled: togglingDoctorId === doctor.id,
+                        disabled: setAccountActive.isPending,
                       }}
                       className="min-h-11 flex-1 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
-                      disabled={togglingDoctorId === doctor.id}
+                      disabled={setAccountActive.isPending}
                       onPress={() => void toggleDoctorActive(doctor)}
                     >
                       {togglingDoctorId === doctor.id ? (

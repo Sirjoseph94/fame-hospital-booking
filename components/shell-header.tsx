@@ -8,6 +8,7 @@ import { notificationsService } from "@/lib/services/notifications";
 import { schedulingService } from "@/lib/services/scheduling";
 import { useBookingStore } from "@/lib/stores/booking";
 import { useSessionStore } from "@/lib/stores/session";
+import { colors } from "@/lib/theme-colors";
 
 interface ShellHeaderProps {
   title: string;
@@ -66,7 +67,7 @@ export function ShellHeader({ title }: ShellHeaderProps) {
         className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface-muted"
         onPress={() => void handleSignOut()}
       >
-        <LogOut color="currentColor" size={22} />
+        <LogOut color={colors.ink} size={22} />
       </Pressable>
     </View>
   );

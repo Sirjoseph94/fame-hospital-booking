@@ -9,6 +9,7 @@ import type {
   BeneficiaryRelationship,
   BlackoutRule,
   Doctor,
+  DoctorDetail,
   RosterDoctor,
   Slot,
   SlotStatus,
@@ -112,7 +113,7 @@ function profileIsActive(profile: DoctorRow["profile"]): boolean {
   return profile.is_active !== false;
 }
 
-export function mapDoctor(row: DoctorRow, nextAvailable: string): Doctor {
+export function mapDoctor(row: DoctorRow, nextAvailable: string | null): Doctor {
   const accountActive = profileIsActive(row.profile);
   return {
     id: row.id,
@@ -125,9 +126,20 @@ export function mapDoctor(row: DoctorRow, nextAvailable: string): Doctor {
   };
 }
 
+export function mapDoctorDetail(row: DoctorRow): DoctorDetail {
+  return {
+    id: row.id,
+    name: profileName(row.profile),
+    department: row.department,
+    specialty: row.specialty,
+    acceptingBookingsFlag: row.is_accepting_bookings,
+    isActive: row.is_active !== false && profileIsActive(row.profile),
+  };
+}
+
 export function mapRosterDoctor(
   row: DoctorRow,
-  nextAvailable: string,
+  nextAvailable: string | null,
 ): RosterDoctor {
   const accountActive = profileIsActive(row.profile);
   return {
@@ -136,7 +148,9 @@ export function mapRosterDoctor(
   };
 }
 
-export function slotStartsAt(row: SlotRow): string {
+export function slotStartsAt(
+  row: Pick<SlotRow, "slot_date" | "start_time">,
+): string {
   const time = row.start_time.length === 5 ? `${row.start_time}:00` : row.start_time;
   return parseISO(`${row.slot_date}T${time}`).toISOString();
 }

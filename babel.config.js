@@ -6,6 +6,6 @@ module.exports = function configureBabel(api) {
       ["babel-preset-expo", { jsxImportSource: "nativewind" }],
       "nativewind/babel",
     ],
-    plugins: ["react-native-reanimated/plugin"],
+    // babel-preset-expo adds the worklets (Reanimated 4) plugin automatically.
   };
 };

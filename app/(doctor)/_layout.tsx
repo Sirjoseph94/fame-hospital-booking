@@ -39,8 +39,9 @@ export default function DoctorLayout() {
             ),
           }}
         />
+        {/* Not "profile": that URL belongs to the patient group (/profile). */}
         <Tabs.Screen
-          name="profile"
+          name="doctor-profile"
           options={{
             title: "Profile",
             tabBarIcon: ({ color, size }) => (

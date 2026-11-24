@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -11,7 +11,10 @@ import {
 
 import { Card } from "@/components/ui/card";
 import { syncPushRegistration } from "@/lib/hooks/use-push-notifications";
-import { notificationsService } from "@/lib/services/notifications";
+import {
+  useNotificationPreferences,
+  useUpdateNotificationPreferences,
+} from "@/lib/queries/profile";
 import type { NotificationPreferencesFields } from "@/lib/validation/notifications";
 
 interface NotificationPreferencesCardProps {
@@ -20,84 +23,67 @@ interface NotificationPreferencesCardProps {
   onPushOptInChange?: (enabled: boolean) => void;
 }
 
+const DEFAULT_PREFS: NotificationPreferencesFields = {
+  emailOptIn: false,
+  smsOptIn: false,
+  pushOptIn: false,
+};
+
 export function NotificationPreferencesCard({
   userId,
   phone,
   onPushOptInChange,
 }: NotificationPreferencesCardProps) {
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const prefsQuery = useNotificationPreferences(userId);
+  const updatePrefs = useUpdateNotificationPreferences(userId);
+  const [syncingPush, setSyncingPush] = useState(false);
+  const saving = updatePrefs.isPending || syncingPush;
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [prefs, setPrefs] = useState<NotificationPreferencesFields>({
-    emailOptIn: false,
-    smsOptIn: false,
-    pushOptIn: false,
-  });
+  // Unsaved toggles (kept on failure, like the old local state).
+  const [draft, setDraft] = useState<NotificationPreferencesFields | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    void notificationsService
-      .getNotificationPreferences(userId)
-      .then((next) => {
-        if (!cancelled) {
-          setPrefs(next);
-        }
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled) {
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "Could not load notification settings.",
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
+  const loading = prefsQuery.data === undefined && prefsQuery.isPending;
+  const loadError = prefsQuery.isError
+    ? prefsQuery.error instanceof Error
+      ? prefsQuery.error.message
+      : "Could not load notification settings."
+    : null;
+  const error = saveError ?? loadError;
+  const prefs: NotificationPreferencesFields =
+    draft ?? prefsQuery.data ?? DEFAULT_PREFS;
 
   const save = async (next: NotificationPreferencesFields) => {
     const trimmedPhone = phone?.trim() ?? "";
     if (next.smsOptIn && !trimmedPhone) {
-      setError("Add a phone number on your profile before enabling SMS.");
+      setSaveError("Add a phone number on your profile before enabling SMS.");
       return;
     }
 
-    setSaving(true);
-    setError(null);
+    setSaveError(null);
     setMessage(null);
     try {
-      const saved = await notificationsService.updateNotificationPreferences(
-        userId,
-        next,
-      );
-      setPrefs(saved);
+      const saved = await updatePrefs.mutateAsync(next);
+      // The mutation cached the saved preferences; show those.
+      setDraft(null);
       onPushOptInChange?.(saved.pushOptIn);
       if (saved.pushOptIn) {
+        setSyncingPush(true);
         await syncPushRegistration(userId);
       }
       setMessage("Notification settings saved.");
     } catch (cause) {
-      setError(
+      setSaveError(
         cause instanceof Error ? cause.message : "Could not save settings.",
       );
     } finally {
-      setSaving(false);
+      setSyncingPush(false);
     }
   };
 
   const toggle = (key: keyof NotificationPreferencesFields, value: boolean) => {
     const next = { ...prefs, [key]: value };
-    setPrefs(next);
+    setDraft(next);
     void save(next);
   };
 
@@ -172,7 +158,7 @@ export function NotificationPreferencesCard({
       ) : null}
 
       {error ? (
-        <Text accessibilityLiveRegion="polite" className="text-sm text-danger">
+        <Text accessibilityLiveRegion="polite" className="text-sm text-ink">
           {error}
         </Text>
       ) : null}

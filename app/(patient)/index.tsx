@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
@@ -6,12 +6,14 @@ import {
   Text,
   View,
 } from "react-native";
-import { router, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import * as Linking from "expo-linking";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { AddBeneficiarySheet } from "@/components/patient/add-beneficiary-sheet";
 import { SetupSelfBeneficiarySheet } from "@/components/patient/setup-self-beneficiary-sheet";
 import { HospitalFooter } from "@/components/patient/hospital-footer";
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { BeneficiaryPill } from "@/components/ui/beneficiary-pill";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -33,38 +35,62 @@ import {
   nextUpcomingAppointment,
   pickSelfBeneficiary,
 } from "@/lib/patient-booking-helpers";
+import { usePatientAppointments } from "@/lib/queries/appointments";
+import {
+  useBeneficiaries,
+  useCreateBeneficiary,
+  useEnsureSelfBeneficiary,
+} from "@/lib/queries/beneficiaries";
+import { useDoctors } from "@/lib/queries/doctors";
+import { queryKeys } from "@/lib/query/keys";
+import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { useBookingStore } from "@/lib/stores/booking";
 import { usePatientBookingPrefs } from "@/lib/stores/patient-booking-prefs";
 import { useSessionStore } from "@/lib/stores/session";
-import {
-  SchedulingError,
-  schedulingService,
-} from "@/lib/services/scheduling";
+import { SchedulingError } from "@/lib/services/scheduling";
 import type { AddBeneficiaryFields } from "@/components/patient/add-beneficiary-sheet";
 import type { SetupSelfBeneficiaryFields } from "@/components/patient/setup-self-beneficiary-sheet";
-import type {
-  AppointmentDbStatus,
-  AppointmentType,
-  Beneficiary,
-  Doctor,
-} from "@/types/scheduling";
+import type { Appointment, Beneficiary, Doctor } from "@/types/scheduling";
+
+const EMPTY_BENEFICIARIES: Beneficiary[] = [];
+const EMPTY_DOCTORS: Doctor[] = [];
+
+function homeErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load your home screen.";
+}
 
 export default function PatientHomeScreen() {
   const session = useSessionStore((state) => state.session);
   const userId = session?.userId;
   const breakpoint = useBreakpoint();
+  const queryClient = useQueryClient();
 
-  const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
-  const [doctors, setDoctors] = useState<Doctor[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const beneficiariesQuery = useBeneficiaries(userId);
+  const doctorsQuery = useDoctors();
+  const appointmentsQuery = usePatientAppointments(userId);
+  const ensureSelf = useEnsureSelfBeneficiary();
+  const createSelfBeneficiary = useCreateBeneficiary();
+  const createDependentBeneficiary = useCreateBeneficiary();
+
+  // Silently refresh whenever Home regains focus (e.g. returning from the
+  // booking flow), so the upcoming card isn't stale.
+  useRefreshOnFocus([
+    queryKeys.beneficiaries(userId ?? ""),
+    queryKeys.doctors.list,
+    queryKeys.appointments.patient(userId ?? ""),
+  ]);
+
+  const beneficiaries = beneficiariesQuery.data ?? EMPTY_BENEFICIARIES;
+  const doctors = doctorsQuery.data ?? EMPTY_DOCTORS;
+  const appointmentRows = appointmentsQuery.data;
+
   const [beneficiarySheetOpen, setBeneficiarySheetOpen] = useState(false);
   const [addPatientOpen, setAddPatientOpen] = useState(false);
   const [addPatientError, setAddPatientError] = useState<string | null>(null);
-  const [addPatientSubmitting, setAddPatientSubmitting] = useState(false);
   const [setupSelfOpen, setSetupSelfOpen] = useState(false);
   const [setupSelfError, setSetupSelfError] = useState<string | null>(null);
-  const [setupSelfSubmitting, setSetupSelfSubmitting] = useState(false);
   const preferredBeneficiaryId = usePatientBookingPrefs(
     (state) => state.selectedBeneficiaryId,
   );
@@ -72,23 +98,8 @@ export default function PatientHomeScreen() {
     (state) => state.setSelectedBeneficiaryId,
   );
   const resetBookingToSelf = usePatientBookingPrefs((state) => state.resetToSelf);
-  const [upcomingVisit, setUpcomingVisit] = useState<{
-    beneficiaryName: string;
-    doctorName: string;
-    startsAt: string;
-    type: "in-clinic" | "telehealth" | "home-visit";
-    dbStatus: AppointmentDbStatus;
-    videoUrl?: string;
-    room?: string;
-    address?: string;
-  } | null>(null);
-  const [returningLine, setReturningLine] = useState<{
-    doctorName: string;
-    appointmentType: AppointmentType;
-  } | null>(null);
 
   const [startingBooking, setStartingBooking] = useState(false);
-  const hasLoadedRef = useRef(false);
   const startingBookingRef = useRef(false);
 
   // Re-render every minute so telehealth join windows stay current.
@@ -97,85 +108,72 @@ export default function PatientHomeScreen() {
   const beginReturningFlow = useBookingStore((state) => state.beginReturningFlow);
   const beginStandardFlow = useBookingStore((state) => state.beginStandardFlow);
 
-  const load = useCallback(async (options?: { silent?: boolean }) => {
-    if (!userId) {
-      return;
+  // Create the account holder's "self" beneficiary once if it's missing.
+  const missingSelf =
+    beneficiariesQuery.data !== undefined &&
+    !pickSelfBeneficiary(beneficiariesQuery.data);
+  const {
+    mutate: ensureSelfBeneficiary,
+    isIdle: ensureSelfIdle,
+    isPending: ensureSelfPending,
+  } = ensureSelf;
+  useEffect(() => {
+    if (userId && missingSelf && ensureSelfIdle) {
+      ensureSelfBeneficiary(userId);
     }
-    setError(null);
-    if (!options?.silent) {
-      setLoading(true);
-    }
-    try {
-      const [initialBeneficiaries, doctorRows, appointmentRows] =
-        await Promise.all([
-          schedulingService.listBeneficiaries(userId),
-          schedulingService.listDoctors(),
-          schedulingService.listAppointments(userId),
-        ]);
-      let beneficiaryRows = initialBeneficiaries;
-      if (!pickSelfBeneficiary(beneficiaryRows)) {
-        const ensured = await schedulingService.ensureSelfBeneficiary(userId);
-        if (ensured) {
-          beneficiaryRows = await schedulingService.listBeneficiaries(userId);
-        }
-      }
-      setBeneficiaries(beneficiaryRows);
-      setDoctors(doctorRows);
-      const self = pickSelfBeneficiary(beneficiaryRows);
-      const lastBooking = lastBookedDoctorId(appointmentRows);
-      if (
-        lastBooking &&
-        self &&
-        lastBooking.appointmentType !== "home-visit" &&
-        doctorNameById(doctorRows, lastBooking.doctorId)
-      ) {
-        setReturningLine({
-          doctorName: doctorNameById(doctorRows, lastBooking.doctorId)!,
-          appointmentType: lastBooking.appointmentType,
-        });
-      } else {
-        setReturningLine(null);
-      }
-      const next = nextUpcomingAppointment(appointmentRows);
-      if (!next?.startsAt) {
-        setUpcomingVisit(null);
-      } else {
-        const beneficiary =
-          beneficiaryRows.find((row) => row.id === next.beneficiaryId) ?? self;
-        setUpcomingVisit({
-          beneficiaryName: beneficiary?.displayName ?? "Patient",
-          doctorName: doctorNameById(doctorRows, next.doctorId) ?? "Doctor",
-          startsAt: next.startsAt,
-          type: next.type,
-          dbStatus: next.dbStatus,
-          videoUrl: next.videoUrl,
-          room: next.room,
-          address: next.address,
-        });
-      }
-    } catch (cause) {
-      const message =
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load your home screen.";
-      setError(message);
-    } finally {
-      hasLoadedRef.current = true;
-      setLoading(false);
-    }
-  }, [userId]);
+  }, [ensureSelfBeneficiary, ensureSelfIdle, missingSelf, userId]);
 
-  // Runs on first focus and silently refreshes whenever Home regains focus
-  // (e.g. returning from the booking flow), so the upcoming card isn't stale.
-  useFocusEffect(
-    useCallback(() => {
-      const task = setTimeout(
-        () => void load({ silent: hasLoadedRef.current }),
-        0,
-      );
-      return () => clearTimeout(task);
-    }, [load]),
-  );
+  const homeQueries = [beneficiariesQuery, doctorsQuery, appointmentsQuery];
+  const initialLoading =
+    homeQueries.some((query) => query.data === undefined && query.isPending) ||
+    (missingSelf && (ensureSelfIdle || ensureSelfPending));
+  const blockingError = homeQueries.find(
+    (query) => query.isError && query.data === undefined,
+  )?.error;
+  const refreshError = homeQueries.find((query) => query.isError)?.error;
+  const retryLoad = () => {
+    void Promise.all(homeQueries.map((query) => query.refetch()));
+  };
+
+  const returningLine = useMemo((): {
+    doctorName: string;
+    appointmentType: Appointment["type"];
+  } | null => {
+    const self = pickSelfBeneficiary(beneficiaries);
+    const lastBooking = lastBookedDoctorId(appointmentRows ?? []);
+    const doctorName = lastBooking
+      ? doctorNameById(doctors, lastBooking.doctorId)
+      : undefined;
+    if (
+      lastBooking &&
+      self &&
+      lastBooking.appointmentType !== "home-visit" &&
+      doctorName
+    ) {
+      return { doctorName, appointmentType: lastBooking.appointmentType };
+    }
+    return null;
+  }, [appointmentRows, beneficiaries, doctors]);
+
+  const upcomingVisit = useMemo(() => {
+    const next = nextUpcomingAppointment(appointmentRows ?? []);
+    if (!next?.startsAt) {
+      return null;
+    }
+    const beneficiary =
+      beneficiaries.find((row) => row.id === next.beneficiaryId) ??
+      pickSelfBeneficiary(beneficiaries);
+    return {
+      beneficiaryName: beneficiary?.displayName ?? "Patient",
+      doctorName: doctorNameById(doctors, next.doctorId) ?? "Doctor",
+      startsAt: next.startsAt,
+      type: next.type,
+      dbStatus: next.dbStatus,
+      videoUrl: next.videoUrl,
+      room: next.room,
+      address: next.address,
+    };
+  }, [appointmentRows, beneficiaries, doctors]);
 
   useEffect(() => {
     if (!preferredBeneficiaryId || beneficiaries.length === 0) {
@@ -203,6 +201,20 @@ export default function PatientHomeScreen() {
     return selfBeneficiary ?? null;
   }, [beneficiaries, preferredBeneficiaryId, selfBeneficiary]);
 
+  /**
+   * The mutation already refetched the list; also make sure the new row is
+   * cached even if that refetch failed, so selecting it doesn't get reset.
+   */
+  const cacheCreatedBeneficiary = (accountHolderId: string, created: Beneficiary) => {
+    queryClient.setQueryData<Beneficiary[]>(
+      queryKeys.beneficiaries(accountHolderId),
+      (rows) =>
+        rows && !rows.some((row) => row.id === created.id)
+          ? [...rows, created]
+          : rows,
+    );
+  };
+
   const handleBookAppointment = async () => {
     if (startingBookingRef.current) {
       return;
@@ -217,13 +229,13 @@ export default function PatientHomeScreen() {
 
     startingBookingRef.current = true;
     setStartingBooking(true);
-    let appointments: Awaited<
-      ReturnType<typeof schedulingService.listAppointments>
-    >;
+    let appointments: Appointment[];
     try {
-      appointments = await schedulingService.listAppointments(session.userId);
-    } catch {
+      // Use fresh history to decide between the returning and standard flows.
+      const result = await appointmentsQuery.refetch();
       // Fall back to the standard flow if history can't be loaded.
+      appointments = result.isError ? [] : (result.data ?? []);
+    } catch {
       appointments = [];
     } finally {
       startingBookingRef.current = false;
@@ -262,45 +274,49 @@ export default function PatientHomeScreen() {
     router.push("/book/doctor");
   };
 
-  const saveSelfBeneficiary = async (values: SetupSelfBeneficiaryFields) => {
+  /** Resolves false on failure so the sheet keeps the draft. */
+  const saveSelfBeneficiary = async (
+    values: SetupSelfBeneficiaryFields,
+  ): Promise<boolean> => {
     if (!session) {
-      return;
+      return false;
     }
-    setSetupSelfSubmitting(true);
     setSetupSelfError(null);
     try {
-      const created = await schedulingService.createBeneficiary({
+      const created = await createSelfBeneficiary.mutateAsync({
         accountHolderId: session.userId,
         displayName: values.displayName,
         relationship: "self",
         dob: values.dob,
         gender: values.gender,
       });
-      setBeneficiaries((rows) => [...rows, created]);
+      cacheCreatedBeneficiary(session.userId, created);
       resetBookingToSelf();
       setSetupSelfOpen(false);
       AccessibilityInfo.announceForAccessibility(
         "You are set up to book for yourself.",
       );
+      return true;
     } catch (cause) {
       setSetupSelfError(
         cause instanceof Error
           ? cause.message
           : "Could not save your patient profile.",
       );
-    } finally {
-      setSetupSelfSubmitting(false);
+      return false;
     }
   };
 
-  const saveBeneficiary = async (values: AddBeneficiaryFields) => {
+  /** Resolves false on failure so the sheet keeps the draft. */
+  const saveBeneficiary = async (
+    values: AddBeneficiaryFields,
+  ): Promise<boolean> => {
     if (!session) {
-      return;
+      return false;
     }
-    setAddPatientSubmitting(true);
     setAddPatientError(null);
     try {
-      const created = await schedulingService.createBeneficiary({
+      const created = await createDependentBeneficiary.mutateAsync({
         accountHolderId: session.userId,
         displayName: values.displayName,
         relationship: values.relationship,
@@ -309,7 +325,7 @@ export default function PatientHomeScreen() {
         nationalId: values.nationalId,
         hospitalFileId: values.hospitalFileId,
       });
-      setBeneficiaries((rows) => [...rows, created]);
+      cacheCreatedBeneficiary(session.userId, created);
       setAddPatientOpen(false);
       void confirmAsync({
         title: `Added ${created.displayName}`,
@@ -329,12 +345,12 @@ export default function PatientHomeScreen() {
         );
         router.push("/book/doctor");
       });
+      return true;
     } catch (cause) {
       setAddPatientError(
         cause instanceof Error ? cause.message : "Could not save patient.",
       );
-    } finally {
-      setAddPatientSubmitting(false);
+      return false;
     }
   };
 
@@ -343,15 +359,15 @@ export default function PatientHomeScreen() {
   return (
     <View className="flex-1 bg-surface-muted">
       <ShellHeader title="Home" />
-      {loading ? (
+      {initialLoading ? (
         <ScreenLoadingSkeleton>
           <HomeScreenSkeleton />
         </ScreenLoadingSkeleton>
-      ) : error ? (
+      ) : blockingError ? (
         <View className="flex-1 justify-center px-4">
           <SchedulingStatePanel
-            message={error}
-            onRetry={() => void load()}
+            message={homeErrorMessage(blockingError)}
+            onRetry={retryLoad}
           />
         </View>
       ) : (
@@ -359,6 +375,9 @@ export default function PatientHomeScreen() {
           contentContainerClassName="gap-4 px-4 pb-8 pt-2"
           contentInsetAdjustmentBehavior="automatic"
         >
+          <RefreshErrorNotice
+            message={refreshError ? homeErrorMessage(refreshError) : null}
+          />
           <View className={isWide ? "flex-row gap-4" : "gap-4"}>
             <View className={isWide ? "flex-1 gap-4" : "gap-4"}>
               <Card style={{ gap: 12 }}>
@@ -470,7 +489,7 @@ export default function PatientHomeScreen() {
                   <Pressable
                     accessibilityLabel="Change doctor or visit type"
                     accessibilityRole="button"
-                    className="min-h-10 justify-center web:hover:opacity-80"
+                    className="min-h-11 justify-center web:hover:opacity-80"
                     onPress={() => {
                       if (!bookingBeneficiary) {
                         return;
@@ -554,7 +573,7 @@ export default function PatientHomeScreen() {
         onOpenChange={setAddPatientOpen}
         onSubmit={saveBeneficiary}
         open={addPatientOpen}
-        submitting={addPatientSubmitting}
+        submitting={createDependentBeneficiary.isPending}
       />
 
       <SetupSelfBeneficiarySheet
@@ -563,7 +582,7 @@ export default function PatientHomeScreen() {
         onOpenChange={setSetupSelfOpen}
         onSubmit={saveSelfBeneficiary}
         open={setupSelfOpen}
-        submitting={setupSelfSubmitting}
+        submitting={createSelfBeneficiary.isPending}
       />
     </View>
   );

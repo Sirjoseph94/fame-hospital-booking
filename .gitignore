@@ -21,3 +21,7 @@ supabase/.branches/
 
 # OS / editor
 .DS_Store
+
+# Agent skill fetch caches
+.agents/skills/*/scripts/.cache/
+!.env.migrate.example

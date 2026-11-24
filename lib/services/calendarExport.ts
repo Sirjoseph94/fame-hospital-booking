@@ -1,4 +1,7 @@
-import * as Calendar from "expo-calendar";
+// SDK 58: the function API moved to expo-calendar/legacy (the main entry
+// keeps throwing stubs). Migrate to the object API (getCalendars,
+// calendar.createEvent) when convenient.
+import * as Calendar from "expo-calendar/legacy";
 import { format } from "date-fns";
 
 import { isNative, isWeb } from "@/lib/platform";

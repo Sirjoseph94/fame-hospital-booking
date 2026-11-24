@@ -7,13 +7,12 @@ import {
   View,
 } from "react-native";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Controller, useForm } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { Link, router } from "expo-router";
 import { z } from "zod";
 
 import { Card } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormTextInput } from "@/components/ui/form-text-input";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { authService } from "@/lib/services/auth";
 import { supabase } from "@/lib/supabase";
 import { useSessionStore } from "@/lib/stores/session";
@@ -38,7 +37,7 @@ export default function ResetPasswordScreen() {
   const {
     control,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { isSubmitting },
   } = useForm<ResetPasswordFields>({
     resolver: zodResolver(resetPasswordSchema),
     defaultValues: { password: "", confirmPassword: "" },
@@ -134,43 +133,22 @@ export default function ResetPasswordScreen() {
             </View>
           ) : (
             <>
-              <View className="gap-2">
-                <Text className="font-medium text-ink">New password</Text>
-                <Controller
-                  control={control}
-                  name="password"
-                  render={({ field: { onBlur, onChange, value } }) => (
-                    <FormTextInput
-                      accessibilityLabel="New password"
-                      autoComplete="new-password"
-                      kind="password"
-                      onBlur={onBlur}
-                      onChangeText={onChange}
-                      value={value}
-                    />
-                  )}
-                />
-                <FieldError message={errors.password?.message} />
-              </View>
+              <FormTextField
+                control={control}
+                label="New password"
+                name="password"
+                autoComplete="new-password"
+                kind="password"
+              />
 
-              <View className="gap-2">
-                <Text className="font-medium text-ink">Confirm password</Text>
-                <Controller
-                  control={control}
-                  name="confirmPassword"
-                  render={({ field: { onBlur, onChange, value } }) => (
-                    <FormTextInput
-                      accessibilityLabel="Confirm new password"
-                      autoComplete="new-password"
-                      kind="password"
-                      onBlur={onBlur}
-                      onChangeText={onChange}
-                      value={value}
-                    />
-                  )}
-                />
-                <FieldError message={errors.confirmPassword?.message} />
-              </View>
+              <FormTextField
+                control={control}
+                label="Confirm password"
+                name="confirmPassword"
+                accessibilityLabel="Confirm new password"
+                autoComplete="new-password"
+                kind="password"
+              />
 
               {submitError ? (
                 <Text

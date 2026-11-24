@@ -6,6 +6,7 @@ import { z } from "zod";
 import { Sheet } from "@/components/ui/sheet";
 import { DatePickerField } from "@/components/ui/date-picker-field";
 import { FieldError } from "@/components/ui/field-error";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { GenderSelectField } from "@/components/ui/gender-select-field";
 import { dobDateSchema, genderSchema } from "@/lib/validation/forms";
@@ -25,7 +26,8 @@ export type AddBeneficiaryFields = z.infer<typeof schema>;
 interface AddBeneficiarySheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: AddBeneficiaryFields) => Promise<void>;
+  /** Resolve `false` on failure to keep the form draft. */
+  onSubmit: (values: AddBeneficiaryFields) => Promise<boolean | void>;
   submitting: boolean;
   errorMessage: string | null;
 }
@@ -55,8 +57,10 @@ export function AddBeneficiarySheet({
   });
 
   const submit = async (values: AddBeneficiaryFields) => {
-    await onSubmit(values);
-    reset();
+    const saved = await onSubmit(values);
+    if (saved !== false) {
+      reset();
+    }
   };
 
   const dobMaximumDate = new Date();
@@ -69,22 +73,12 @@ export function AddBeneficiarySheet({
       accessibilityLabel="Add beneficiary form"
     >
       <View className="gap-3">
-        <View className="gap-1">
-          <Text className="text-sm font-medium text-ink">Full name</Text>
-          <Controller
-            control={control}
-            name="displayName"
-            render={({ field: { onBlur, onChange, value } }) => (
-              <FormTextInput
-                accessibilityLabel="Full name"
-                onBlur={onBlur}
-                onChangeText={onChange}
-                value={value}
-              />
-            )}
-          />
-          <FieldError message={errors.displayName?.message} />
-        </View>
+        <FormTextField
+          compact
+          control={control}
+          label="Full name"
+          name="displayName"
+        />
 
         <Controller
           control={control}
@@ -113,22 +107,14 @@ export function AddBeneficiarySheet({
           )}
         />
 
-        <View className="gap-1">
-          <Text className="text-sm font-medium text-ink">National ID (optional)</Text>
-          <Controller
-            control={control}
-            name="nationalId"
-            render={({ field: { onBlur, onChange, value } }) => (
-              <FormTextInput
-                accessibilityLabel="National ID"
-                autoCapitalize="characters"
-                onBlur={onBlur}
-                onChangeText={onChange}
-                value={value ?? ""}
-              />
-            )}
-          />
-        </View>
+        <FormTextField
+          compact
+          control={control}
+          label="National ID (optional)"
+          name="nationalId"
+          accessibilityLabel="National ID"
+          autoCapitalize="characters"
+        />
 
         <View className="gap-1">
           <Text className="text-sm font-medium text-ink">

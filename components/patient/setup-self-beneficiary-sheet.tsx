@@ -6,8 +6,7 @@ import { z } from "zod";
 
 import { Sheet } from "@/components/ui/sheet";
 import { DatePickerField } from "@/components/ui/date-picker-field";
-import { FieldError } from "@/components/ui/field-error";
-import { FormTextInput } from "@/components/ui/form-text-input";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { GenderSelectField } from "@/components/ui/gender-select-field";
 import { dobDateSchema, genderSchema } from "@/lib/validation/forms";
 
@@ -23,7 +22,8 @@ interface SetupSelfBeneficiarySheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultDisplayName?: string;
-  onSubmit: (values: SetupSelfBeneficiaryFields) => Promise<void>;
+  /** Resolve `false` on failure to keep the form draft. */
+  onSubmit: (values: SetupSelfBeneficiaryFields) => Promise<boolean | void>;
   submitting: boolean;
   errorMessage: string | null;
 }
@@ -40,7 +40,6 @@ export function SetupSelfBeneficiarySheet({
     control,
     handleSubmit,
     reset,
-    formState: { errors },
   } = useForm<SetupSelfBeneficiaryFields>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -61,8 +60,10 @@ export function SetupSelfBeneficiarySheet({
   }, [defaultDisplayName, open, reset]);
 
   const submit = async (values: SetupSelfBeneficiaryFields) => {
-    await onSubmit(values);
-    reset();
+    const saved = await onSubmit(values);
+    if (saved !== false) {
+      reset();
+    }
   };
 
   const dobMaximumDate = new Date();
@@ -80,22 +81,12 @@ export function SetupSelfBeneficiarySheet({
           dependents later.
         </Text>
 
-        <View className="gap-1">
-          <Text className="text-sm font-medium text-ink">Full name</Text>
-          <Controller
-            control={control}
-            name="displayName"
-            render={({ field: { onBlur, onChange, value } }) => (
-              <FormTextInput
-                accessibilityLabel="Full name"
-                onBlur={onBlur}
-                onChangeText={onChange}
-                value={value}
-              />
-            )}
-          />
-          <FieldError message={errors.displayName?.message} />
-        </View>
+        <FormTextField
+          compact
+          control={control}
+          label="Full name"
+          name="displayName"
+        />
 
         <Controller
           control={control}

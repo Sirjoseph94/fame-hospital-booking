@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   ScrollView,
@@ -8,11 +8,13 @@ import {
 import { Stack, router } from "expo-router";
 import { format, parseISO } from "date-fns";
 
+import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { SlotChip } from "@/components/ui/slot-chip";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { SlotGridSkeleton } from "@/components/ui/skeleton";
+import { useBookableSlots } from "@/lib/queries/slots";
 import { groupSlotsByDate } from "@/lib/slot-groups";
 import { useBookingStore } from "@/lib/stores/booking";
 import {
@@ -21,6 +23,14 @@ import {
 } from "@/lib/services/scheduling";
 import type { Slot } from "@/types/scheduling";
 
+const EMPTY_SLOTS: Slot[] = [];
+
+function slotsErrorMessage(cause: unknown): string {
+  return cause instanceof SchedulingError
+    ? cause.message
+    : "Could not load appointment slots.";
+}
+
 export default function BookSlotScreen() {
   const doctorId = useBookingStore((state) => state.doctorId);
   const doctorName = useBookingStore((state) => state.doctorName);
@@ -28,9 +38,13 @@ export default function BookSlotScreen() {
   const skipIntake = useBookingStore((state) => state.skipIntake);
   const setSlot = useBookingStore((state) => state.setSlot);
 
-  const [slots, setSlots] = useState<Slot[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const slotsQuery = useBookableSlots(doctorId ?? undefined);
+  const slots = slotsQuery.data ?? EMPTY_SLOTS;
+  const initialLoading = slotsQuery.data === undefined && slotsQuery.isPending;
+  const blockingError =
+    slotsQuery.isError && slotsQuery.data === undefined ? slotsQuery.error : null;
+  const refreshError = slotsQuery.isError ? slotsQuery.error : null;
+
   const [raceError, setRaceError] = useState<string | null>(null);
   const [raceErrorCode, setRaceErrorCode] = useState<
     SchedulingError["code"] | null
@@ -39,38 +53,13 @@ export default function BookSlotScreen() {
 
   const sections = useMemo(() => groupSlotsByDate(slots), [slots]);
 
-  const load = useCallback(async () => {
-    if (!doctorId) {
-      return;
-    }
-    setError(null);
-    setLoading(true);
-    try {
-      const rows = await schedulingService.listSlots(doctorId);
-      setSlots(rows);
-    } catch (cause) {
-      const message =
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load appointment slots.";
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }, [doctorId]);
-
   const didRedirect = useRef(false);
   useEffect(() => {
-    if (!doctorId) {
-      if (!didRedirect.current) {
-        didRedirect.current = true;
-        router.replace("/");
-      }
-      return;
+    if (!doctorId && !didRedirect.current) {
+      didRedirect.current = true;
+      router.replace("/");
     }
-    const task = setTimeout(() => void load(), 0);
-    return () => clearTimeout(task);
-  }, [doctorId, load]);
+  }, [doctorId]);
 
   const mapVariant = (
     slot: Slot,
@@ -108,7 +97,7 @@ export default function BookSlotScreen() {
         setRaceErrorCode(cause.code);
         AccessibilityInfo.announceForAccessibility(cause.message);
         if (cause.code === "SLOT_TAKEN" || cause.code === "HOLD_EXPIRED") {
-          await load();
+          await slotsQuery.refetch();
         }
       }
     } finally {
@@ -119,15 +108,15 @@ export default function BookSlotScreen() {
   return (
     <>
       <Stack.Screen options={{ title: "Pick a time" }} />
-      {loading ? (
+      {initialLoading ? (
         <View className="flex-1 bg-surface-muted px-4 py-4">
           <SlotGridSkeleton />
         </View>
-      ) : error ? (
+      ) : blockingError ? (
         <View className="flex-1 justify-center bg-surface-muted px-4">
           <SchedulingStatePanel
-            message={error}
-            onRetry={() => void load()}
+            message={slotsErrorMessage(blockingError)}
+            onRetry={() => void slotsQuery.refetch()}
           />
         </View>
       ) : slots.length === 0 ? (
@@ -135,6 +124,9 @@ export default function BookSlotScreen() {
           <Card style={{ gap: 4 }}>
             <Text className="text-lg font-semibold text-ink">{doctorName}</Text>
           </Card>
+          <RefreshErrorNotice
+            message={refreshError ? slotsErrorMessage(refreshError) : null}
+          />
           <EmptyState message="No open slots for this doctor. Try another day or doctor." />
         </View>
       ) : (
@@ -149,6 +141,10 @@ export default function BookSlotScreen() {
               Tap an open slot to hold it for five minutes.
             </Text>
           </Card>
+
+          <RefreshErrorNotice
+            message={refreshError ? slotsErrorMessage(refreshError) : null}
+          />
 
           {sections.map((section) => (
             <View key={section.dateKey} className="gap-2">
@@ -187,7 +183,9 @@ export default function BookSlotScreen() {
                 setRaceErrorCode(null);
               }}
               onRetry={
-                raceErrorCode === "NETWORK_ERROR" ? () => void load() : undefined
+                raceErrorCode === "NETWORK_ERROR"
+                  ? () => void slotsQuery.refetch()
+                  : undefined
               }
             />
           ) : null}

@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { Card } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { roleHomeRoutes } from "@/lib/role-routes";
 import { authService } from "@/lib/services/auth";
@@ -69,23 +70,13 @@ export default function SignInScreen() {
         </View>
 
         <Card style={{ gap: 16 }}>
-          <View className="gap-2">
-            <Text className="font-medium text-ink">Email</Text>
-            <Controller
-              control={control}
-              name="email"
-              render={({ field: { onBlur, onChange, value } }) => (
-                <FormTextInput
-                  accessibilityLabel="Email address"
-                  kind="email"
-                  onBlur={onBlur}
-                  onChangeText={onChange}
-                  value={value}
-                />
-              )}
-            />
-            <FieldError message={errors.email?.message} />
-          </View>
+          <FormTextField
+            control={control}
+            label="Email"
+            name="email"
+            accessibilityLabel="Email address"
+            kind="email"
+          />
 
           <View className="gap-2">
             <Text className="font-medium text-ink">Password</Text>

@@ -1,0 +1,90 @@
+# Production release on every push to main.
+#
+# Native code unchanged (fingerprint matches an existing production build)
+#   -> publish an over-the-air update to the "production" channel.
+# Native code changed (no matching build)
+#   -> make new production store builds (submit them with submit-production.yml).
+# The website is always deployed to Expo Hosting production.
+#
+# Merge to main only through PRs that passed GitHub Actions CI (branch protection).
+
+name: Deploy to production
+
+on:
+  push:
+    branches: ['main']
+
+concurrency:
+  group: deploy-production
+  cancel_in_progress: false
+
+jobs:
+  fingerprint:
+    name: Fingerprint native code
+    type: fingerprint
+    environment: production
+
+  get_android_build:
+    name: Find matching Android build
+    needs: [fingerprint]
+    type: get-build
+    params:
+      fingerprint_hash: ${{ needs.fingerprint.outputs.android_fingerprint_hash }}
+      profile: production
+      platform: android
+
+  get_ios_build:
+    name: Find matching iOS build
+    needs: [fingerprint]
+    type: get-build
+    params:
+      fingerprint_hash: ${{ needs.fingerprint.outputs.ios_fingerprint_hash }}
+      profile: production
+      platform: ios
+
+  build_android:
+    name: Build Android (native changes)
+    needs: [get_android_build]
+    if: ${{ !needs.get_android_build.outputs.build_id }}
+    type: build
+    params:
+      platform: android
+      profile: production
+
+  build_ios:
+    name: Build iOS (native changes)
+    needs: [get_ios_build]
+    if: ${{ !needs.get_ios_build.outputs.build_id }}
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  update_android:
+    name: OTA update Android
+    needs: [get_android_build]
+    if: ${{ needs.get_android_build.outputs.build_id }}
+    type: update
+    environment: production
+    params:
+      channel: production
+      platform: android
+      message: ${{ github.commit_message }}
+
+  update_ios:
+    name: OTA update iOS
+    needs: [get_ios_build]
+    if: ${{ needs.get_ios_build.outputs.build_id }}
+    type: update
+    environment: production
+    params:
+      channel: production
+      platform: ios
+      message: ${{ github.commit_message }}
+
+  deploy_web:
+    name: Deploy website
+    type: deploy
+    environment: production
+    params:
+      prod: true

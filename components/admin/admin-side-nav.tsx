@@ -6,6 +6,8 @@ import {
   UsersRound,
 } from "lucide-react-native";
 
+import { colors } from "@/lib/theme-colors";
+
 const links = [
   { href: "/roster", label: "Roster", Icon: UsersRound },
   { href: "/appointments", label: "Appointments", Icon: CalendarRange },
@@ -47,7 +49,7 @@ export function AdminSideNav() {
               onPress={() => router.push(href)}
             >
               <View className={selected ? "text-primary" : "text-ink-muted"}>
-                <Icon color="currentColor" size={20} />
+                <Icon color={selected ? colors.primary : colors["ink-muted"]} size={20} />
               </View>
               <Text
                 className={[

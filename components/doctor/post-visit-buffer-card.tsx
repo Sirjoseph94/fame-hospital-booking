@@ -3,6 +3,7 @@ import { CalendarClock } from "lucide-react-native";
 
 import { Card } from "@/components/ui/card";
 import { formatSchedulingTimeRange } from "@/lib/format-scheduling-time";
+import { colors } from "@/lib/theme-colors";
 
 interface PostVisitBufferCardProps {
   startsAt: string;
@@ -20,9 +21,9 @@ export function PostVisitBufferCard({
 
   return (
     <View accessibilityLabel={summary}>
-      <Card style={{ gap: 8, backgroundColor: "#F8FAFC" }}>
+      <Card style={{ gap: 8, backgroundColor: colors["surface-muted"] }}>
         <View className="flex-row items-center gap-3">
-          <CalendarClock color="#64748B" size={20} />
+          <CalendarClock color={colors["ink-muted"]} size={20} />
           <View className="min-w-0 flex-1 gap-1">
             <Text className="text-sm font-semibold text-ink-muted">
               Post-visit buffer · {minutes} min

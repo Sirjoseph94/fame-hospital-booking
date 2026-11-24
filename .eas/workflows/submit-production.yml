@@ -1,0 +1,53 @@
+# Submit the latest production builds to the stores (TestFlight / Play internal
+# track as a draft). Manual on purpose: run it once a build from
+# deploy-production.yml has been checked.
+#
+# Needs store credentials configured in EAS first (see docs/RUNBOOK.md §13).
+
+name: Submit to stores
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Which store to submit to
+        type: choice
+        default: all
+        options: [all, android, ios]
+
+jobs:
+  get_android_build:
+    name: Latest Android production build
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'android' }}
+    type: get-build
+    params:
+      platform: android
+      profile: production
+      distribution: store
+
+  get_ios_build:
+    name: Latest iOS production build
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'ios' }}
+    type: get-build
+    params:
+      platform: ios
+      profile: production
+      distribution: store
+
+  submit_android:
+    name: Submit to Google Play
+    needs: [get_android_build]
+    if: ${{ needs.get_android_build.outputs.build_id }}
+    type: submit
+    params:
+      build_id: ${{ needs.get_android_build.outputs.build_id }}
+      profile: production
+
+  submit_ios:
+    name: Submit to App Store Connect
+    needs: [get_ios_build]
+    if: ${{ needs.get_ios_build.outputs.build_id }}
+    type: submit
+    params:
+      build_id: ${{ needs.get_ios_build.outputs.build_id }}
+      profile: production

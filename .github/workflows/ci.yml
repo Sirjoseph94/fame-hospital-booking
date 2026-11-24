@@ -21,6 +21,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      # Every platform's native binaries must be in the lockfile, or EAS Linux
+      # builds fail (e.g. lightningcss.linux-x64-gnu.node). No install needed.
+      - name: Lockfile includes all platform binaries
+        run: node scripts/check-lockfile.mjs
+
       # Match the npm version EAS uses (see packageManager in package.json).
       - run: npm install -g npm@10.9.2
       - run: npm ci
@@ -31,6 +36,46 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Unit tests
+        run: npm test -- --ci
+
       - name: Expo dependency check
         run: npx expo install --check
         continue-on-error: true
+
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      # Applies supabase/migrations twice (idempotency) and runs security tests.
+      - name: Migration chain + security tests
+        run: bash supabase/tests/run.sh
+
+  edge-functions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # --frozen: fail if deno.lock doesn't match (pinned esm.sh dependencies).
+      - name: Typecheck Edge Functions
+        working-directory: supabase/functions/dispatch-notifications
+        run: deno check --frozen index.ts

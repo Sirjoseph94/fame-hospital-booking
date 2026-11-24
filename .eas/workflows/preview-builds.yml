@@ -1,0 +1,31 @@
+# Internal-distribution builds for testers (install from the build page / QR).
+# Run manually: npx eas-cli workflow:run .eas/workflows/preview-builds.yml
+# or from the Workflows tab on expo.dev.
+
+name: Preview builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Which platform to build
+        type: choice
+        default: all
+        options: [all, android, ios]
+
+jobs:
+  build_android:
+    name: Build Android (preview)
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'android' }}
+    type: build
+    params:
+      platform: android
+      profile: preview
+
+  build_ios:
+    name: Build iOS (preview)
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'ios' }}
+    type: build
+    params:
+      platform: ios
+      profile: preview

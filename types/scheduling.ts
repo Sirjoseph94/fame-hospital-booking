@@ -29,8 +29,25 @@ export interface Doctor {
   name: string;
   department: string;
   specialty: string;
-  nextAvailable: string;
+  /** Start of the next open slot (ISO), or null when none is open. */
+  nextAvailable: string | null;
   isAcceptingBookings: boolean;
+}
+
+/**
+ * One doctor's stored settings (no derived availability). Unlike `Doctor`,
+ * the booking flag and activation state are kept separate so admin screens
+ * can show and toggle them independently.
+ */
+export interface DoctorDetail {
+  id: string;
+  name: string;
+  department: string;
+  specialty: string;
+  /** Raw `doctors.is_accepting_bookings` flag. */
+  acceptingBookingsFlag: boolean;
+  /** `doctors.is_active` and the doctor's account (`profiles.is_active`). */
+  isActive: boolean;
 }
 
 /** Doctor row for admin roster, including account activation state. */

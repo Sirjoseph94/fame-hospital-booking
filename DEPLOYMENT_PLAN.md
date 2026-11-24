@@ -65,7 +65,7 @@
 |------|-------------|--------|
 | Rewrite `README.md` | Live Supabase, env vars, migration order, quality scripts | I-01 |
 | Add `docs/RUNBOOK.md` | Admin user, migrations, doctor bootstrap, smoke test | I-01, I-02 |
-| Migration checklist | `schema.sql` → `20260318_*` → `20260319_*` → `20260320_*` → invites (skip if duplicate) | I-01 |
+| Migration checklist | `supabase/migrations/*` in filename order (`supabase db push` or SQL Editor); see RUNBOOK §2 | I-01 |
 | Optional seed SQL | `supabase/seed_pilot.sql` (commented templates) | I-02 |
 | RUNBOOK security note | Document I-21, I-22 for pilot operators | I-21, I-22 |
 
@@ -136,7 +136,7 @@
 ### 1.5.3 Self beneficiary integrity (I-17)
 
 - `createBeneficiary`: if `relationship === 'self'`, reject when self already exists for account.
-- Optional migration: `CREATE UNIQUE INDEX ... ON beneficiaries (account_holder_id) WHERE relationship = 'self'`.
+- Enforced in the DB by `20260922000100_beneficiary_integrity.sql` (unique index `beneficiaries_one_self_per_holder`); sign-up and `ensureSelfBeneficiary` treat a duplicate as "already exists".
 
 ### 1.5.4 Returning booking guard (I-18)
 
@@ -156,7 +156,7 @@
 - [ ] Patient reschedules pending visit → still pending
 - [ ] Sign out during booking → slot released (after TTL max 5 min if release fails)
 - [ ] Reload on confirm with expired hold → sent Home with message
-- [ ] Cannot create second self beneficiary
+- [x] Cannot create second self beneficiary (DB-enforced; covered by `supabase/tests/security_tests.sql`)
 - [ ] Returning book blocked when doctor not accepting
 - [ ] Cold start repairs self beneficiary when metadata exists
 
@@ -223,7 +223,7 @@
 
 ### 4.1 Deactivate users (I-05)
 
-Admin UI: toggle `profiles.is_active` (not self). Already enforced on login.
+Admin UI: toggle `profiles.is_active` (not self). Enforced on login and, since `20260922000000_enforce_account_deactivation.sql`, server-side for live sessions too.
 
 ### 4.2 Forgot password (I-04)
 

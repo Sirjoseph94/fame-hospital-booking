@@ -21,24 +21,63 @@ Use this guide to stand up a **fresh Supabase project** and complete **one patie
 
 ## 2. Migration checklist (run in order)
 
-Run each file as a **New query** in **SQL Editor**, top to bottom. Wait for success before the next file.
+All schema lives in [`supabase/migrations/`](../supabase/migrations/). Files run in **filename order**, and every file is **idempotent**: re-running the whole chain leaves the database unchanged (CI checks this, §2b).
+
+**Option A: migration script (recommended).** `scripts/db.sh` wraps the Supabase CLI (pinned, run through npx; nothing to install).
+
+```bash
+cp .env.migrate.example .env.migrate   # then paste the Session pooler URL (Dashboard → Connect)
+npm run db:status                      # local files vs. what the database has applied
+npm run db:plan                        # dry run: what push would apply
+npm run db:push                        # runs the local migration tests, shows the plan, asks you to type the host, applies
+```
+
+| Command | What it does |
+|---|---|
+| `npm run db:status` | Lists every migration file and whether the target database has it recorded as applied |
+| `npm run db:plan` | Dry run of `push` |
+| `npm run db:push` | `db:test` first (needs Docker; `-- --skip-tests` to skip), then the plan, a typed confirmation, and the apply. `-- --yes` confirms non-interactively (CI) |
+| `npm run db:baseline -- <version>` | Records migrations up to `<version>` as already applied, **without running them**. One-time, for databases set up through the SQL Editor (§2a) |
+| `npm run db:new -- <name>` | Creates `supabase/migrations/<timestamp>_<name>.sql` with the idempotency checklist |
+| `npm run db:test` | Applies the whole chain twice to a throwaway Postgres (Docker) and runs `security_tests.sql` (§2b) |
+
+The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). The script never prints the password. Use the **Session pooler** string (port 5432); the direct connection is IPv6-only.
+
+**Option B: SQL Editor.** Run each file as a **New query**, top to bottom, waiting for success before the next.
 
 | Step | File | Notes |
 |------|------|--------|
-| 1 | [`supabase/schema.sql`](../supabase/schema.sql) | Core tables, RLS, `doctor_invites`, `claim_doctor_invite` RPC |
-| 2 | [`supabase/migrations/20260318_enterprise_scheduling.sql`](../supabase/migrations/20260318_enterprise_scheduling.sql) | Beneficiaries, holds, blackouts, appointment extensions, booking slot UPDATE policy |
-| 3 | [`supabase/migrations/20260319_doctor_appointment_context.sql`](../supabase/migrations/20260319_doctor_appointment_context.sql) | Doctor read access to holder profiles and beneficiaries |
-| 4 | [`supabase/migrations/20260320_profile_extensions.sql`](../supabase/migrations/20260320_profile_extensions.sql) | Optional profile medical/contact fields |
-| 5 *(optional)* | [`supabase/migrations/004_avatars_bucket.sql`](../supabase/migrations/004_avatars_bucket.sql) | Storage bucket for avatars; **not required** for pilot (upload UI deferred) |
-| 6 | [`supabase/migrations/20260918_invites_and_account_management.sql`](../supabase/migrations/20260918_invites_and_account_management.sql) | **`is_active` on profiles** — run this even if step 1 included invites |
-| 7 | [`supabase/migrations/20260918_blackout_delete_policy.sql`](../supabase/migrations/20260918_blackout_delete_policy.sql) | Doctor **delete** on own `blackout_rules` (Phase 5) |
-| 8 | [`supabase/migrations/20260919_phase7_slot_security.sql`](../supabase/migrations/20260919_phase7_slot_security.sql) | **Phase 7:** slot hold/book RPCs, drop broad slot UPDATE policy, `admin_audit_log` |
-| 9 | [`supabase/migrations/20260920_notifications.sql`](../supabase/migrations/20260920_notifications.sql) | Notification preferences, push tokens, delivery outbox, appointment triggers |
-| 10 | [`supabase/migrations/20260921000000_security_hardening.sql`](../supabase/migrations/20260921000000_security_hardening.sql) | **Required.** Role-escalation fixes, transactional booking RPCs, appointment write lockdown, invite/claim hardening, function privileges, indexes. See §7a. |
+| 1 | [`20260317000000_init.sql`](../supabase/migrations/20260317000000_init.sql) | Core tables, sign-up trigger, `current_role()`, base RLS |
+| 2 | [`20260318000000_enterprise_scheduling.sql`](../supabase/migrations/20260318000000_enterprise_scheduling.sql) | Beneficiaries, holds, blackouts, appointment extensions |
+| 3 | [`20260319000000_doctor_appointment_context.sql`](../supabase/migrations/20260319000000_doctor_appointment_context.sql) | Doctor read access to holder profiles and beneficiaries |
+| 4 | [`20260320000000_profile_extensions.sql`](../supabase/migrations/20260320000000_profile_extensions.sql) | Optional profile medical/contact fields |
+| 5 | [`20260321000000_avatars_bucket.sql`](../supabase/migrations/20260321000000_avatars_bucket.sql) | Avatars storage bucket (upload UI deferred; harmless) |
+| 6 | [`20260918000000_invites_and_account_management.sql`](../supabase/migrations/20260918000000_invites_and_account_management.sql) | `is_active` on profiles, `doctor_invites`, `claim_doctor_invite` |
+| 7 | [`20260918000100_blackout_delete_policy.sql`](../supabase/migrations/20260918000100_blackout_delete_policy.sql) | Doctor **delete** on own `blackout_rules` (Phase 5) |
+| 8 | [`20260919000000_phase7_slot_security.sql`](../supabase/migrations/20260919000000_phase7_slot_security.sql) | **Phase 7:** slot hold/book RPCs, drop broad slot UPDATE policy, `admin_audit_log` |
+| 9 | [`20260920000000_notifications.sql`](../supabase/migrations/20260920000000_notifications.sql) | Notification preferences, push tokens, delivery outbox, appointment triggers |
+| 10 | [`20260921000000_security_hardening.sql`](../supabase/migrations/20260921000000_security_hardening.sql) | **Required.** Role-escalation fixes, transactional booking RPCs, appointment write lockdown, invite/claim hardening, function privileges, indexes. See §7a. |
+| 11 | [`20260922000000_enforce_account_deactivation.sql`](../supabase/migrations/20260922000000_enforce_account_deactivation.sql) | Deactivated accounts (`profiles.is_active = false`) lose all data access immediately, including RPCs, even with a live session |
+| 12 | [`20260922000100_beneficiary_integrity.sql`](../supabase/migrations/20260922000100_beneficiary_integrity.sql) | One `self` beneficiary per account (unique index); aborts with merge instructions if duplicates exist |
+| 13 | [`20260922000200_doctor_next_available_view.sql`](../supabase/migrations/20260922000200_doctor_next_available_view.sql) | `doctor_next_available_slots` view (one row per doctor, RLS-respecting) + slot index |
+| 14 | [`20260922000300_notification_retry.sql`](../supabase/migrations/20260922000300_notification_retry.sql) | `claimed_at` on `notification_deliveries` for retries / stuck-row recovery (see §12 sweep) |
 
-### Skip duplicate `doctor_invites`
+### 2a. Existing databases (set up through the SQL Editor)
 
-If step 1 already created `doctor_invites`, policies, and `claim_doctor_invite`, **do not re-run** the duplicate `CREATE TABLE` / policy blocks from step 6. For a greenfield install from `schema.sql` only, step 6 still adds `is_active` safely via `add column if not exists`; if policies already exist, ignore “already exists” errors on duplicate policy names or run only the `is_active` alter from that file.
+Databases built by pasting files into the SQL Editor have an **empty migration history**, so a plain `db:push` would try to re-run everything from step 1. Record what's already there first, **once**:
+
+1. Work out the last migration you applied by hand. For example, if you ran steps 1–10 (through `20260921000000_security_hardening.sql`), the version is `20260921000000`.
+2. Run `npm run db:baseline -- 20260921000000`. It lists the files it will mark and asks you to type `baseline`.
+3. Run `npm run db:plan`. It should show only the migrations after that version (steps 11–14 at the time of writing).
+4. Run `npm run db:push`.
+
+Earlier files only gained `drop policy if exists` guards during the migration cleanup, so their contents match what you ran by hand. If unsure whether a step was applied, baseline only up to the last one you're certain of: every migration is idempotent, so re-running an applied one is safe.
+
+### 2b. Testing migrations
+
+`bash supabase/tests/run.sh` builds a throwaway Postgres 17 (Docker), applies the chain **twice** (fails if the second run changes anything), then runs [`security_tests.sql`](../supabase/tests/security_tests.sql): role escalation, invite claiming, holds, booking/reschedule/cancel, double booking, function privileges. CI runs the same script on every PR. Add a test there when you add a policy or RPC.
+
+New migrations: create them with `npm run db:new -- <name>` (names them `YYYYMMDDHHMMSS_<name>.sql`), guard every `create policy` with `drop policy if exists`, and use `if not exists` / `create or replace` elsewhere.
 
 **Verify after migrations:**
 
@@ -137,7 +176,7 @@ If no doctors or slots appear, finish [§4 Doctor bootstrap](#4-doctor-bootstrap
 
 ## 7. Security notes (I-21, I-22) — Phase 7
 
-After migration **step 8** (`20260919_phase7_slot_security.sql`), patient slot transitions use **SECURITY DEFINER RPCs** instead of a broad UPDATE policy:
+After migration **step 8** (`20260919000000_phase7_slot_security.sql`), patient slot transitions use **SECURITY DEFINER RPCs** instead of a broad UPDATE policy:
 
 | RPC | Purpose |
 |-----|---------|
@@ -191,7 +230,6 @@ Other changes:
 | No doctors in picker | `doctors` row exists, `is_active`, `is_accepting_bookings` |
 | No slots | Doctor **Schedule** tab or seed templates; slot `status = 'available'`, future date |
 | RLS errors in console | Migrations 1–4 applied; user authenticated |
-| Duplicate policy errors on step 6 | Expected if `schema.sql` already created invites; run only missing pieces |
 
 ---
 
@@ -256,6 +294,8 @@ supabase functions deploy dispatch-notifications --no-verify-jwt
 
 Generate one with `openssl rand -hex 32`.
 
+**Dependencies:** the function runs on Deno, not Node, so it doesn't use `package.json`. Its imports are pinned in `supabase/functions/dispatch-notifications/deno.json` (import map) and `deno.lock` (content hashes). To bump `@supabase/supabase-js`, edit the URL in `deno.json`, then run `deno check index.ts` in that folder to refresh `deno.lock`, and commit both. CI runs `deno check --frozen`, which fails if the lockfile is out of date.
+
 Set secrets (Dashboard → Edge Functions → Secrets, or CLI):
 
 | Secret | Purpose |
@@ -280,7 +320,20 @@ In **Supabase Dashboard → Database → Webhooks → Create**:
 5. **Payload:** send the new row (include `id`)
 6. **HTTP headers:** add `x-webhook-secret: <NOTIFICATION_WEBHOOK_SECRET value>`
 
-The function reads `record.id`, atomically claims the row (`pending` → `processing`) so retries cannot double-send, and records `attempts`. Rows stuck in `processing` (e.g. function crash) can be reset to `pending` and replayed manually.
+The function reads `record.id`, atomically claims the row (`pending` → `processing`, setting `claimed_at`) so duplicate calls cannot double-send, and records `attempts`. A failed send returns to `pending` until it has been tried **3 times**, then becomes `failed`.
+
+### Retry sweep (schedule this)
+
+The webhook only fires on INSERT, so retries and crash recovery need a scheduled call. In **Dashboard → Integrations → Cron → Create job**:
+
+1. **Schedule:** every 5 minutes (`*/5 * * * *`)
+2. **Type:** Supabase Edge Function → `dispatch-notifications`, method POST
+3. **Headers:** `x-webhook-secret: <NOTIFICATION_WEBHOOK_SECRET value>`, `Content-Type: application/json`
+4. **Body:** `{"sweep": true}`
+
+Each sweep resets rows stuck in `processing` for over 10 minutes back to `pending`, then sends up to 50 `pending` rows older than 1 minute that are under the attempt limit. The response lists what it recovered and processed.
+
+Manual run: `curl -X POST https://<ref>.supabase.co/functions/v1/dispatch-notifications -H "x-webhook-secret: $SECRET" -H "Content-Type: application/json" -d '{"sweep":true}'`
 
 ### User opt-in
 
@@ -297,6 +350,91 @@ The function reads `record.id`, atomically claims the row (`pending` → `proces
 5. Cancel or reschedule → both parties get appropriate `event_type`s.
 
 ---
+
+---
+
+## 13. CI/CD with EAS (builds, OTA updates, web hosting, store submission)
+
+Two systems, two jobs:
+
+| System | Files | Runs | Purpose |
+|---|---|---|---|
+| **GitHub Actions** | `.github/workflows/ci.yml` | every PR + push to `main` | Typecheck, lint, unit tests, migration + security tests, Edge Function typecheck |
+| **EAS Workflows** | `.eas/workflows/*.yml` | see below | Native builds, OTA updates, web deploys, store submission |
+
+### EAS workflows
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `pr-preview.yml` | PR opened / updated | Web preview at `…--pr-<n>.expo.app`, OTA update on branch `pr-<n>`, PR comment with links/QR |
+| `deploy-production.yml` | push to `main` | Fingerprints native code. **Unchanged** → OTA update to the `production` channel. **Changed** → new production store builds. Always deploys the website to production |
+| `preview-builds.yml` | manual | Internal-distribution builds for testers (`preview` channel) |
+| `submit-production.yml` | manual | Submits the latest production builds: TestFlight, and the Play **internal** track as a **draft** |
+
+Run a manual workflow from **expo.dev → project → Workflows**, or:
+`npx eas-cli workflow:run .eas/workflows/preview-builds.yml`
+
+### Build profiles, channels, environments (`eas.json`)
+
+| Profile | Distribution | EAS environment | Update channel |
+|---|---|---|---|
+| `development` | internal (dev client) | development | development |
+| `preview` | internal | preview | preview |
+| `production` | store (auto-incremented build number) | production | production |
+
+`runtimeVersion` uses the **fingerprint** policy (`app.json`). An OTA update only reaches builds whose native code matches, so a JS-only change ships as an update and a native change needs a new build. `deploy-production.yml` decides this automatically.
+
+### Environment variables
+
+Builds and web deploys read **EAS environment variables**, not `.env`. `.env` is gitignored, so it never reaches EAS. Project-scoped variables, set in all three environments:
+
+| Variable | Visibility | Notes |
+|---|---|---|
+| `EXPO_PUBLIC_SUPABASE_URL` | plaintext | Supabase project URL |
+| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | sensitive | Public client key (embedded in the app by design; RLS protects data) |
+
+All three environments currently point at the **same** Supabase project. To give preview builds a staging database later, update the `development`/`preview` values:
+
+```bash
+npx eas-cli env:update --name EXPO_PUBLIC_SUPABASE_URL --environment preview --value https://<staging-ref>.supabase.co
+npx eas-cli env:list --environment production      # check
+```
+
+Server secrets (`NOTIFICATION_WEBHOOK_SECRET`, Resend, Twilio) are **Supabase Edge Function secrets** (§12), never EAS or `EXPO_PUBLIC_*` variables.
+
+### One-time setup (account owner)
+
+1. **Connect GitHub to EAS:** expo.dev → `@lazpet/fame-hospital-bookings` → **Project settings → GitHub** → install the Expo GitHub app on `Sirjoseph94/fame-hospital-booking`. Without it, the push/PR triggers and PR comments won't fire.
+2. **Signing credentials**, needed before any workflow build:
+   - Android: `npx eas-cli credentials:configure-build -p android -e production` (lets EAS generate and store the upload keystore). Repeat with `-e preview` for preview builds.
+   - iOS: `npx eas-cli credentials:configure-build -p ios -e production` (signs in to your Apple Developer account and creates the certificate and provisioning profile). Repeat with `-e preview`. Ad hoc builds also need test devices registered: `npx eas-cli device:create`.
+3. **First web deploy** (claims the hosting subdomain): `npx expo export -p web && npx eas-cli deploy`. Workflows can deploy after that.
+4. **Store submission** (before using `submit-production.yml`):
+   - iOS: create the app in App Store Connect (bundle ID `org.famehmrc.booking`), then add an App Store Connect API key: `npx eas-cli credentials -p ios` → App Store Connect API Key.
+   - Android: create the app in Google Play Console. **Upload the first AAB manually** (Google requires it). Then add a Google service account key: `npx eas-cli credentials -p android` → Google Service Account.
+5. **Protect `main` on GitHub** so merges require the CI checks (`check`, `migrations`, `edge-functions`). `deploy-production.yml` deploys whatever lands on `main`.
+
+### Database and Edge Functions are not deployed by CI
+
+Migrations (§2, `npm run db:push`) and the Edge Function (§12) are deployed by hand, **before** the app build or update that depends on them. This is deliberate: a bad migration can't be undone with a rollback.
+
+### Dependencies and the lockfile (EAS runs on Linux)
+
+EAS Android builds and web deploys run on **Linux x64**, and iOS builds on macOS. Several packages ship a native binary per platform (lightningcss for NativeWind, Expo's noxcturnal, @parcel/watcher, the ESLint resolver), so `package-lock.json` must list **every** platform's binary. npm 10 silently drops other platforms' binaries when you `npm install <pkg>` with `node_modules` present. Your Mac keeps working, and EAS fails with errors like `Cannot find module '../lightningcss.linux-x64-gnu.node'`.
+
+| Command | When |
+|---|---|
+| `npm run check:lockfile` | After any dependency change (≈1 s). Also runs in CI and as EAS's `eas-build-pre-install` hook, so a bad lockfile fails fast with this message |
+| `npm run lock:regen` | When the check fails: rebuilds the lockfile in a clean directory with npm 10.9.2, verifies it, and reinstalls with `npm ci` |
+| `npm run check:linux` | Before pushing dependency changes: clean `npm ci` + metro config + web export in a `linux/amd64` Docker container (the EAS/CI environment) |
+
+You can't give EAS Build a Dockerfile; it uses Expo's build images (selectable with `image` in `eas.json`). Docker is for **reproducing** that Linux environment locally (`check:linux`).
+
+### Rolling back
+
+- **OTA update:** `npx eas-cli update:republish --channel production` (choose the previous update group), or roll back in expo.dev → Updates.
+- **Website:** expo.dev → Hosting → Deployments → promote an earlier deployment to production.
+- **Native build:** submit the previous build, or ship a fix through the normal flow.
 
 ## Phase 0 acceptance (from deployment plan)
 
