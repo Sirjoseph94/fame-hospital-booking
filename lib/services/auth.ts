@@ -171,7 +171,9 @@ export const authService: AuthService = {
           dob,
           gender,
         });
-      if (beneficiaryError) {
+      // 23505: a "self" row already exists (e.g. created by the Home screen
+      // first). One per account is enforced by the database, so that's fine.
+      if (beneficiaryError && beneficiaryError.code !== "23505") {
         throw new Error(
           `Account created, but your patient profile could not be saved: ${beneficiaryError.message}`,
         );
