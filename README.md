@@ -87,3 +87,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) §10–11 for hosting, Supabase Auth URLs
 | `supabase/` | Schema, migrations, optional seed |
 
 Product build sequence and decisions: `PLAN.md`.
+
+## Deployment
+
+CI (GitHub Actions) checks every PR. EAS Workflows (`.eas/workflows/`) handle PR previews, production OTA updates or builds, the website on Expo Hosting, and manual store submission. Builds read EAS environment variables, not `.env`. Setup and one-time steps: [docs/RUNBOOK.md](docs/RUNBOOK.md) §13.

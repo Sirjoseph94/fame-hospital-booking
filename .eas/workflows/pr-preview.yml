@@ -1,0 +1,39 @@
+# Preview every pull request:
+# - website preview on Expo Hosting (preview environment)
+# - OTA update on a branch named after the PR, openable from a development build
+# - a PR comment with the preview URL and update QR codes
+#
+# Native changes in a PR aren't covered by an update; use preview-builds.yml.
+
+name: PR preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number || github.ref }}
+  cancel_in_progress: true
+
+jobs:
+  deploy_web:
+    name: Deploy website preview
+    if: ${{ !github.event.pull_request.draft }}
+    type: deploy
+    environment: preview
+    params:
+      alias: pr-${{ github.event.pull_request.number }}
+
+  publish_update:
+    name: Publish preview update
+    if: ${{ !github.event.pull_request.draft }}
+    type: update
+    environment: preview
+    params:
+      branch: pr-${{ github.event.pull_request.number }}
+      message: ${{ github.event.pull_request.title }}
+
+  comment:
+    name: Comment on PR
+    needs: [deploy_web, publish_update]
+    type: github-comment

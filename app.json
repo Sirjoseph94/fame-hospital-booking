@@ -3,6 +3,14 @@
     "name": "FAME Hospital Booking",
     "slug": "fame-hospital-bookings",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/56329a97-4f48-4c32-8854-2ca46c744dba",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
     "scheme": "fame-hospital",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

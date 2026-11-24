@@ -342,6 +342,79 @@ Manual run: `curl -X POST https://<ref>.supabase.co/functions/v1/dispatch-notifi
 
 ---
 
+---
+
+## 13. CI/CD with EAS (builds, OTA updates, web hosting, store submission)
+
+Two systems, two jobs:
+
+| System | Files | Runs | Purpose |
+|---|---|---|---|
+| **GitHub Actions** | `.github/workflows/ci.yml` | every PR + push to `main` | Typecheck, lint, unit tests, migration + security tests, Edge Function typecheck |
+| **EAS Workflows** | `.eas/workflows/*.yml` | see below | Native builds, OTA updates, web deploys, store submission |
+
+### EAS workflows
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `pr-preview.yml` | PR opened / updated | Web preview at `…--pr-<n>.expo.app`, OTA update on branch `pr-<n>`, PR comment with links/QR |
+| `deploy-production.yml` | push to `main` | Fingerprints native code. **Unchanged** → OTA update to the `production` channel. **Changed** → new production store builds. Always deploys the website to production |
+| `preview-builds.yml` | manual | Internal-distribution builds for testers (`preview` channel) |
+| `submit-production.yml` | manual | Submits the latest production builds: TestFlight, and the Play **internal** track as a **draft** |
+
+Run a manual workflow from **expo.dev → project → Workflows**, or:
+`npx eas-cli workflow:run .eas/workflows/preview-builds.yml`
+
+### Build profiles, channels, environments (`eas.json`)
+
+| Profile | Distribution | EAS environment | Update channel |
+|---|---|---|---|
+| `development` | internal (dev client) | development | development |
+| `preview` | internal | preview | preview |
+| `production` | store (auto-incremented build number) | production | production |
+
+`runtimeVersion` uses the **fingerprint** policy (`app.json`). An OTA update only reaches builds whose native code matches, so a JS-only change ships as an update and a native change needs a new build. `deploy-production.yml` decides this automatically.
+
+### Environment variables
+
+Builds and web deploys read **EAS environment variables**, not `.env`. `.env` is gitignored, so it never reaches EAS. Project-scoped variables, set in all three environments:
+
+| Variable | Visibility | Notes |
+|---|---|---|
+| `EXPO_PUBLIC_SUPABASE_URL` | plaintext | Supabase project URL |
+| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | sensitive | Public client key (embedded in the app by design; RLS protects data) |
+
+All three environments currently point at the **same** Supabase project. To give preview builds a staging database later, update the `development`/`preview` values:
+
+```bash
+npx eas-cli env:update --name EXPO_PUBLIC_SUPABASE_URL --environment preview --value https://<staging-ref>.supabase.co
+npx eas-cli env:list --environment production      # check
+```
+
+Server secrets (`NOTIFICATION_WEBHOOK_SECRET`, Resend, Twilio) are **Supabase Edge Function secrets** (§12), never EAS or `EXPO_PUBLIC_*` variables.
+
+### One-time setup (account owner)
+
+1. **Connect GitHub to EAS:** expo.dev → `@lazpet/fame-hospital-bookings` → **Project settings → GitHub** → install the Expo GitHub app on `Sirjoseph94/fame-hospital-booking`. Without it, the push/PR triggers and PR comments won't fire.
+2. **Signing credentials**, needed before any workflow build:
+   - Android: `npx eas-cli credentials:configure-build -p android -e production` (lets EAS generate and store the upload keystore). Repeat with `-e preview` for preview builds.
+   - iOS: `npx eas-cli credentials:configure-build -p ios -e production` (signs in to your Apple Developer account and creates the certificate and provisioning profile). Repeat with `-e preview`. Ad hoc builds also need test devices registered: `npx eas-cli device:create`.
+3. **First web deploy** (claims the hosting subdomain): `npx expo export -p web && npx eas-cli deploy`. Workflows can deploy after that.
+4. **Store submission** (before using `submit-production.yml`):
+   - iOS: create the app in App Store Connect (bundle ID `org.famehmrc.booking`), then add an App Store Connect API key: `npx eas-cli credentials -p ios` → App Store Connect API Key.
+   - Android: create the app in Google Play Console. **Upload the first AAB manually** (Google requires it). Then add a Google service account key: `npx eas-cli credentials -p android` → Google Service Account.
+5. **Protect `main` on GitHub** so merges require the CI checks (`check`, `migrations`, `edge-functions`). `deploy-production.yml` deploys whatever lands on `main`.
+
+### Database and Edge Functions are not deployed by CI
+
+Migrations (§2, `supabase db push`) and the Edge Function (§12) are deployed by hand, **before** the app build or update that depends on them. This is deliberate: a bad migration can't be undone with a rollback.
+
+### Rolling back
+
+- **OTA update:** `npx eas-cli update:republish --channel production` (choose the previous update group), or roll back in expo.dev → Updates.
+- **Website:** expo.dev → Hosting → Deployments → promote an earlier deployment to production.
+- **Native build:** submit the previous build, or ship a fix through the normal flow.
+
 ## Phase 0 acceptance (from deployment plan)
 
 > New engineer follows RUNBOOK and completes **one booking on web**.
