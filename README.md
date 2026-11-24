@@ -33,17 +33,9 @@ Restart the dev server after changing env vars. Never commit `.env`.
 
 ## Database setup
 
-Apply SQL in this order (details and checks in RUNBOOK):
+All schema lives in `supabase/migrations/` and runs in filename order. Either `supabase link --project-ref <ref> && supabase db push`, or paste each file into the SQL Editor in order. See [docs/RUNBOOK.md](docs/RUNBOOK.md) §2 (including §2a for databases created before the migration cleanup).
 
-1. `supabase/schema.sql`
-2. `supabase/migrations/20260318_enterprise_scheduling.sql`
-3. `supabase/migrations/20260319_doctor_appointment_context.sql`
-4. `supabase/migrations/20260320_profile_extensions.sql`
-5. `supabase/migrations/004_avatars_bucket.sql` *(optional; avatars deferred for pilot)*
-6. `supabase/migrations/20260918_invites_and_account_management.sql` — **skip** if you already ran `schema.sql` (it includes `doctor_invites` and `claim_doctor_invite`)
-7. `supabase/migrations/20260918_blackout_delete_policy.sql`
-8. `supabase/migrations/20260919_phase7_slot_security.sql`
-9. `supabase/migrations/20260920_notifications.sql`
+Test the chain locally with `bash supabase/tests/run.sh` (needs Docker).
 
 Optional commented seed templates: `supabase/seed_pilot.sql`.
 

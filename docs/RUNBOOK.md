@@ -21,24 +21,54 @@ Use this guide to stand up a **fresh Supabase project** and complete **one patie
 
 ## 2. Migration checklist (run in order)
 
-Run each file as a **New query** in **SQL Editor**, top to bottom. Wait for success before the next file.
+All schema lives in [`supabase/migrations/`](../supabase/migrations/). Files run in **filename order**, and every file is **idempotent**: re-running the whole chain leaves the database unchanged (CI checks this, §2b).
+
+**Option A: Supabase CLI (recommended)**
+
+```bash
+supabase link --project-ref <project-ref>
+supabase db push
+```
+
+**Option B: SQL Editor.** Run each file as a **New query**, top to bottom, waiting for success before the next.
 
 | Step | File | Notes |
 |------|------|--------|
-| 1 | [`supabase/schema.sql`](../supabase/schema.sql) | Core tables, RLS, `doctor_invites`, `claim_doctor_invite` RPC |
-| 2 | [`supabase/migrations/20260318_enterprise_scheduling.sql`](../supabase/migrations/20260318_enterprise_scheduling.sql) | Beneficiaries, holds, blackouts, appointment extensions, booking slot UPDATE policy |
-| 3 | [`supabase/migrations/20260319_doctor_appointment_context.sql`](../supabase/migrations/20260319_doctor_appointment_context.sql) | Doctor read access to holder profiles and beneficiaries |
-| 4 | [`supabase/migrations/20260320_profile_extensions.sql`](../supabase/migrations/20260320_profile_extensions.sql) | Optional profile medical/contact fields |
-| 5 *(optional)* | [`supabase/migrations/004_avatars_bucket.sql`](../supabase/migrations/004_avatars_bucket.sql) | Storage bucket for avatars; **not required** for pilot (upload UI deferred) |
-| 6 | [`supabase/migrations/20260918_invites_and_account_management.sql`](../supabase/migrations/20260918_invites_and_account_management.sql) | **`is_active` on profiles** — run this even if step 1 included invites |
-| 7 | [`supabase/migrations/20260918_blackout_delete_policy.sql`](../supabase/migrations/20260918_blackout_delete_policy.sql) | Doctor **delete** on own `blackout_rules` (Phase 5) |
-| 8 | [`supabase/migrations/20260919_phase7_slot_security.sql`](../supabase/migrations/20260919_phase7_slot_security.sql) | **Phase 7:** slot hold/book RPCs, drop broad slot UPDATE policy, `admin_audit_log` |
-| 9 | [`supabase/migrations/20260920_notifications.sql`](../supabase/migrations/20260920_notifications.sql) | Notification preferences, push tokens, delivery outbox, appointment triggers |
-| 10 | [`supabase/migrations/20260921000000_security_hardening.sql`](../supabase/migrations/20260921000000_security_hardening.sql) | **Required.** Role-escalation fixes, transactional booking RPCs, appointment write lockdown, invite/claim hardening, function privileges, indexes. See §7a. |
+| 1 | [`20260317000000_init.sql`](../supabase/migrations/20260317000000_init.sql) | Core tables, sign-up trigger, `current_role()`, base RLS |
+| 2 | [`20260318000000_enterprise_scheduling.sql`](../supabase/migrations/20260318000000_enterprise_scheduling.sql) | Beneficiaries, holds, blackouts, appointment extensions |
+| 3 | [`20260319000000_doctor_appointment_context.sql`](../supabase/migrations/20260319000000_doctor_appointment_context.sql) | Doctor read access to holder profiles and beneficiaries |
+| 4 | [`20260320000000_profile_extensions.sql`](../supabase/migrations/20260320000000_profile_extensions.sql) | Optional profile medical/contact fields |
+| 5 | [`20260321000000_avatars_bucket.sql`](../supabase/migrations/20260321000000_avatars_bucket.sql) | Avatars storage bucket (upload UI deferred; harmless) |
+| 6 | [`20260918000000_invites_and_account_management.sql`](../supabase/migrations/20260918000000_invites_and_account_management.sql) | `is_active` on profiles, `doctor_invites`, `claim_doctor_invite` |
+| 7 | [`20260918000100_blackout_delete_policy.sql`](../supabase/migrations/20260918000100_blackout_delete_policy.sql) | Doctor **delete** on own `blackout_rules` (Phase 5) |
+| 8 | [`20260919000000_phase7_slot_security.sql`](../supabase/migrations/20260919000000_phase7_slot_security.sql) | **Phase 7:** slot hold/book RPCs, drop broad slot UPDATE policy, `admin_audit_log` |
+| 9 | [`20260920000000_notifications.sql`](../supabase/migrations/20260920000000_notifications.sql) | Notification preferences, push tokens, delivery outbox, appointment triggers |
+| 10 | [`20260921000000_security_hardening.sql`](../supabase/migrations/20260921000000_security_hardening.sql) | **Required.** Role-escalation fixes, transactional booking RPCs, appointment write lockdown, invite/claim hardening, function privileges, indexes. See §7a. |
+| 11 | [`20260922000000_enforce_account_deactivation.sql`](../supabase/migrations/20260922000000_enforce_account_deactivation.sql) | Deactivated accounts (`profiles.is_active = false`) lose all data access immediately, including RPCs, even with a live session |
+| 12 | [`20260922000100_beneficiary_integrity.sql`](../supabase/migrations/20260922000100_beneficiary_integrity.sql) | One `self` beneficiary per account (unique index); aborts with merge instructions if duplicates exist |
+| 13 | [`20260922000200_doctor_next_available_view.sql`](../supabase/migrations/20260922000200_doctor_next_available_view.sql) | `doctor_next_available_slots` view (one row per doctor, RLS-respecting) + slot index |
+| 14 | [`20260922000300_notification_retry.sql`](../supabase/migrations/20260922000300_notification_retry.sql) | `claimed_at` on `notification_deliveries` for retries / stuck-row recovery (see §12 sweep) |
 
-### Skip duplicate `doctor_invites`
+### 2a. Existing databases (set up before the migration cleanup)
 
-If step 1 already created `doctor_invites`, policies, and `claim_doctor_invite`, **do not re-run** the duplicate `CREATE TABLE` / policy blocks from step 6. For a greenfield install from `schema.sql` only, step 6 still adds `is_active` safely via `add column if not exists`; if policies already exist, ignore “already exists” errors on duplicate policy names or run only the `is_active` alter from that file.
+Earlier installs ran `supabase/schema.sql` (now removed) plus the same files under their old names (`004_avatars_bucket.sql`, `20260318_*.sql`, …). Their contents are unchanged apart from added `drop policy if exists` guards, so:
+
+- **SQL Editor users:** just run step 10 if you haven't. Re-running any earlier file is safe but unnecessary.
+- **Switching to `supabase db push`:** the CLI has no record of the SQL Editor runs, so mark steps 1–9 (plus 10 if applied) as already applied first, then push:
+
+  ```bash
+  supabase migration repair --status applied 20260317000000 20260318000000 20260319000000 \
+    20260320000000 20260321000000 20260918000000 20260918000100 20260919000000 20260920000000
+  supabase db push   # applies 20260921000000 and anything newer
+  ```
+
+  Check with `supabase migration list` before pushing.
+
+### 2b. Testing migrations
+
+`bash supabase/tests/run.sh` builds a throwaway Postgres 17 (Docker), applies the chain **twice** (fails if the second run changes anything), then runs [`security_tests.sql`](../supabase/tests/security_tests.sql): role escalation, invite claiming, holds, booking/reschedule/cancel, double booking, function privileges. CI runs the same script on every PR. Add a test there when you add a policy or RPC.
+
+New migrations: name them `YYYYMMDDHHMMSS_description.sql` (`supabase migration new <description>`), guard every `create policy` with `drop policy if exists`, and use `if not exists` / `create or replace` elsewhere.
 
 **Verify after migrations:**
 
@@ -137,7 +167,7 @@ If no doctors or slots appear, finish [§4 Doctor bootstrap](#4-doctor-bootstrap
 
 ## 7. Security notes (I-21, I-22) — Phase 7
 
-After migration **step 8** (`20260919_phase7_slot_security.sql`), patient slot transitions use **SECURITY DEFINER RPCs** instead of a broad UPDATE policy:
+After migration **step 8** (`20260919000000_phase7_slot_security.sql`), patient slot transitions use **SECURITY DEFINER RPCs** instead of a broad UPDATE policy:
 
 | RPC | Purpose |
 |-----|---------|
@@ -191,7 +221,6 @@ Other changes:
 | No doctors in picker | `doctors` row exists, `is_active`, `is_accepting_bookings` |
 | No slots | Doctor **Schedule** tab or seed templates; slot `status = 'available'`, future date |
 | RLS errors in console | Migrations 1–4 applied; user authenticated |
-| Duplicate policy errors on step 6 | Expected if `schema.sql` already created invites; run only missing pieces |
 
 ---
 
@@ -280,7 +309,20 @@ In **Supabase Dashboard → Database → Webhooks → Create**:
 5. **Payload:** send the new row (include `id`)
 6. **HTTP headers:** add `x-webhook-secret: <NOTIFICATION_WEBHOOK_SECRET value>`
 
-The function reads `record.id`, atomically claims the row (`pending` → `processing`) so retries cannot double-send, and records `attempts`. Rows stuck in `processing` (e.g. function crash) can be reset to `pending` and replayed manually.
+The function reads `record.id`, atomically claims the row (`pending` → `processing`, setting `claimed_at`) so duplicate calls cannot double-send, and records `attempts`. A failed send returns to `pending` until it has been tried **3 times**, then becomes `failed`.
+
+### Retry sweep (schedule this)
+
+The webhook only fires on INSERT, so retries and crash recovery need a scheduled call. In **Dashboard → Integrations → Cron → Create job**:
+
+1. **Schedule:** every 5 minutes (`*/5 * * * *`)
+2. **Type:** Supabase Edge Function → `dispatch-notifications`, method POST
+3. **Headers:** `x-webhook-secret: <NOTIFICATION_WEBHOOK_SECRET value>`, `Content-Type: application/json`
+4. **Body:** `{"sweep": true}`
+
+Each sweep resets rows stuck in `processing` for over 10 minutes back to `pending`, then sends up to 50 `pending` rows older than 1 minute that are under the attempt limit. The response lists what it recovered and processed.
+
+Manual run: `curl -X POST https://<ref>.supabase.co/functions/v1/dispatch-notifications -H "x-webhook-secret: $SECRET" -H "Content-Type: application/json" -d '{"sweep":true}'`
 
 ### User opt-in
 
