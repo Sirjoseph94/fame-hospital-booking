@@ -1,6 +1,8 @@
 # FAME Hospital Booking
 
-Cross-platform hospital scheduling for **iOS, Android, and web**. The app is an **Expo SDK 57** project with **Expo Router**, strict TypeScript, NativeWind v4, **Supabase Auth**, and **live Supabase-backed scheduling** (`lib/services/scheduling.ts` talks to Postgres via the anon client—not mock data).
+Cross-platform hospital scheduling for **iOS, Android, and web**. The app is an **Expo SDK 58** (React Native 0.88) project with **Expo Router**, strict TypeScript, NativeWind v4, **Supabase Auth**, and **live Supabase-backed scheduling** (`lib/services/scheduling/` talks to Postgres via the anon client—not mock data).
+
+Requires Node 22.13+, 24.3+ or 26+ (odd-numbered Node releases are not supported by SDK 58).
 
 ## What’s implemented
 
