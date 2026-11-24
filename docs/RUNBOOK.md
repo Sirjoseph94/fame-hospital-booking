@@ -23,12 +23,25 @@ Use this guide to stand up a **fresh Supabase project** and complete **one patie
 
 All schema lives in [`supabase/migrations/`](../supabase/migrations/). Files run in **filename order**, and every file is **idempotent**: re-running the whole chain leaves the database unchanged (CI checks this, §2b).
 
-**Option A: Supabase CLI (recommended)**
+**Option A: migration script (recommended).** `scripts/db.sh` wraps the Supabase CLI (pinned, run through npx; nothing to install).
 
 ```bash
-supabase link --project-ref <project-ref>
-supabase db push
+cp .env.migrate.example .env.migrate   # then paste the Session pooler URL (Dashboard → Connect)
+npm run db:status                      # local files vs. what the database has applied
+npm run db:plan                        # dry run: what push would apply
+npm run db:push                        # runs the local migration tests, shows the plan, asks you to type the host, applies
 ```
+
+| Command | What it does |
+|---|---|
+| `npm run db:status` | Lists every migration file and whether the target database has it recorded as applied |
+| `npm run db:plan` | Dry run of `push` |
+| `npm run db:push` | `db:test` first (needs Docker; `-- --skip-tests` to skip), then the plan, a typed confirmation, and the apply. `-- --yes` confirms non-interactively (CI) |
+| `npm run db:baseline -- <version>` | Records migrations up to `<version>` as already applied, **without running them**. One-time, for databases set up through the SQL Editor (§2a) |
+| `npm run db:new -- <name>` | Creates `supabase/migrations/<timestamp>_<name>.sql` with the idempotency checklist |
+| `npm run db:test` | Applies the whole chain twice to a throwaway Postgres (Docker) and runs `security_tests.sql` (§2b) |
+
+The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). The script never prints the password. Use the **Session pooler** string (port 5432); the direct connection is IPv6-only.
 
 **Option B: SQL Editor.** Run each file as a **New query**, top to bottom, waiting for success before the next.
 
@@ -49,26 +62,22 @@ supabase db push
 | 13 | [`20260922000200_doctor_next_available_view.sql`](../supabase/migrations/20260922000200_doctor_next_available_view.sql) | `doctor_next_available_slots` view (one row per doctor, RLS-respecting) + slot index |
 | 14 | [`20260922000300_notification_retry.sql`](../supabase/migrations/20260922000300_notification_retry.sql) | `claimed_at` on `notification_deliveries` for retries / stuck-row recovery (see §12 sweep) |
 
-### 2a. Existing databases (set up before the migration cleanup)
+### 2a. Existing databases (set up through the SQL Editor)
 
-Earlier installs ran `supabase/schema.sql` (now removed) plus the same files under their old names (`004_avatars_bucket.sql`, `20260318_*.sql`, …). Their contents are unchanged apart from added `drop policy if exists` guards, so:
+Databases built by pasting files into the SQL Editor have an **empty migration history**, so a plain `db:push` would try to re-run everything from step 1. Record what's already there first, **once**:
 
-- **SQL Editor users:** just run step 10 if you haven't. Re-running any earlier file is safe but unnecessary.
-- **Switching to `supabase db push`:** the CLI has no record of the SQL Editor runs, so mark steps 1–9 (plus 10 if applied) as already applied first, then push:
+1. Work out the last migration you applied by hand. For example, if you ran steps 1–10 (through `20260921000000_security_hardening.sql`), the version is `20260921000000`.
+2. Run `npm run db:baseline -- 20260921000000`. It lists the files it will mark and asks you to type `baseline`.
+3. Run `npm run db:plan`. It should show only the migrations after that version (steps 11–14 at the time of writing).
+4. Run `npm run db:push`.
 
-  ```bash
-  supabase migration repair --status applied 20260317000000 20260318000000 20260319000000 \
-    20260320000000 20260321000000 20260918000000 20260918000100 20260919000000 20260920000000
-  supabase db push   # applies 20260921000000 and anything newer
-  ```
-
-  Check with `supabase migration list` before pushing.
+Earlier files only gained `drop policy if exists` guards during the migration cleanup, so their contents match what you ran by hand. If unsure whether a step was applied, baseline only up to the last one you're certain of: every migration is idempotent, so re-running an applied one is safe.
 
 ### 2b. Testing migrations
 
 `bash supabase/tests/run.sh` builds a throwaway Postgres 17 (Docker), applies the chain **twice** (fails if the second run changes anything), then runs [`security_tests.sql`](../supabase/tests/security_tests.sql): role escalation, invite claiming, holds, booking/reschedule/cancel, double booking, function privileges. CI runs the same script on every PR. Add a test there when you add a policy or RPC.
 
-New migrations: name them `YYYYMMDDHHMMSS_description.sql` (`supabase migration new <description>`), guard every `create policy` with `drop policy if exists`, and use `if not exists` / `create or replace` elsewhere.
+New migrations: create them with `npm run db:new -- <name>` (names them `YYYYMMDDHHMMSS_<name>.sql`), guard every `create policy` with `drop policy if exists`, and use `if not exists` / `create or replace` elsewhere.
 
 **Verify after migrations:**
 
@@ -407,7 +416,7 @@ Server secrets (`NOTIFICATION_WEBHOOK_SECRET`, Resend, Twilio) are **Supabase Ed
 
 ### Database and Edge Functions are not deployed by CI
 
-Migrations (§2, `supabase db push`) and the Edge Function (§12) are deployed by hand, **before** the app build or update that depends on them. This is deliberate: a bad migration can't be undone with a rollback.
+Migrations (§2, `npm run db:push`) and the Edge Function (§12) are deployed by hand, **before** the app build or update that depends on them. This is deliberate: a bad migration can't be undone with a rollback.
 
 ### Rolling back
 

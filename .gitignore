@@ -24,3 +24,4 @@ supabase/.branches/
 
 # Agent skill fetch caches
 .agents/skills/*/scripts/.cache/
+!.env.migrate.example

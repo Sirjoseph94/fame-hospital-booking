@@ -11,7 +11,13 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint app components lib types",
     "eas": "npx --yes eas-cli",
-    "test": "TZ=UTC jest"
+    "test": "TZ=UTC jest",
+    "db:status": "bash scripts/db.sh status",
+    "db:plan": "bash scripts/db.sh plan",
+    "db:push": "bash scripts/db.sh push",
+    "db:baseline": "bash scripts/db.sh baseline",
+    "db:new": "bash scripts/db.sh new",
+    "db:test": "bash scripts/db.sh test"
   },
   "dependencies": {
     "@expo/metro-runtime": "~58.0.17",
