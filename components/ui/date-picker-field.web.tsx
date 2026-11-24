@@ -3,6 +3,7 @@ import { Text, View } from "react-native";
 import { format } from "date-fns";
 
 import { FieldError } from "@/components/ui/field-error";
+import { colors } from "@/lib/theme-colors";
 
 interface DatePickerFieldProps {
   label: string;
@@ -25,9 +26,9 @@ const inputStyle = {
   borderRadius: 12,
   borderWidth: 1,
   borderStyle: "solid" as const,
-  borderColor: "#64748B",
-  backgroundColor: "#FFFFFF",
-  color: "#0F172A",
+  borderColor: colors["ink-muted"],
+  backgroundColor: colors.surface,
+  color: colors.ink,
 };
 
 export function DatePickerField({

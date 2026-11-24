@@ -484,7 +484,9 @@ export default function AdminRosterScreen() {
                     </Text>
                     <Text className="text-xs text-ink-muted" selectable>
                       Next open slot:{" "}
-                      {format(parseISO(doctor.nextAvailable), "MMM d · h:mm a")}
+                      {doctor.nextAvailable
+                        ? format(parseISO(doctor.nextAvailable), "MMM d · h:mm a")
+                        : "none"}
                     </Text>
                   </View>
                   <View className="flex-row flex-wrap gap-2">

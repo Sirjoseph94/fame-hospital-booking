@@ -90,10 +90,14 @@ export default function BookDoctorScreen() {
                 <Text className="text-lg font-semibold text-ink">{item.name}</Text>
                 <Text className="text-sm text-ink-muted">{item.specialty}</Text>
                 <Text className="text-sm text-ink-muted">{item.department}</Text>
-                <Text className="text-sm text-available" selectable>
-                  Next available{" "}
-                  {format(parseISO(item.nextAvailable), "EEE, MMM d · h:mm a")}
-                </Text>
+                {item.nextAvailable ? (
+                  <Text className="text-sm text-available" selectable>
+                    Next available{" "}
+                    {format(parseISO(item.nextAvailable), "EEE, MMM d · h:mm a")}
+                  </Text>
+                ) : (
+                  <Text className="text-sm text-ink-muted">No open slots right now</Text>
+                )}
               </Card>
             </Pressable>
           )}

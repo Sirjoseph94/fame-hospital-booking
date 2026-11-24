@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { formatSchedulingTimeRange } from "@/lib/format-scheduling-time";
+import { visitStatusLabel } from "@/lib/visit-status-label";
 import { CalendarClock, ChevronDown, ChevronUp, MapPin, Video } from "lucide-react-native";
 
 import { Card } from "@/components/ui/card";
+import { colors } from "@/lib/theme-colors";
 import type {
   AppointmentDbStatus,
   AppointmentStatus,
@@ -40,22 +42,6 @@ function typeLabel(type: AppointmentType): string {
   return "Home visit";
 }
 
-function statusLabel(
-  status: AppointmentStatus,
-  dbStatus?: AppointmentDbStatus,
-): string {
-  if (status === "completed") {
-    return "Completed";
-  }
-  if (status === "cancelled") {
-    return "Cancelled";
-  }
-  if (dbStatus === "pending") {
-    return "Needs confirmation";
-  }
-  return "Confirmed";
-}
-
 export function DoctorVisitCard({
   beneficiaryName,
   startsAt,
@@ -77,7 +63,7 @@ export function DoctorVisitCard({
 }: DoctorVisitCardProps) {
   const [clinicalOpen, setClinicalOpen] = useState(false);
   const when = formatSchedulingTimeRange(startsAt, endsAt);
-  const summary = `${statusLabel(status, dbStatus)} visit with ${beneficiaryName}, ${when}`;
+  const summary = `${visitStatusLabel(status, dbStatus, "doctor")} visit with ${beneficiaryName}, ${when}`;
   const showManageActions =
     status === "upcoming" &&
     Boolean(onConfirm || onMarkComplete || onReschedule || onCancel);
@@ -90,7 +76,7 @@ export function DoctorVisitCard({
         style={{
           gap: 12,
           ...(pending
-            ? { borderWidth: 1, borderColor: "#d97706" }
+            ? { borderWidth: 1, borderColor: colors.warning }
             : {}),
         }}
       >
@@ -111,14 +97,14 @@ export function DoctorVisitCard({
                 pending ? "text-amber-800" : "text-ink-muted"
               }`}
             >
-              {statusLabel(status, dbStatus)}
+              {visitStatusLabel(status, dbStatus, "doctor")}
             </Text>
           </View>
         </View>
 
         <View className="flex-row items-center gap-2">
           <View className="text-ink-muted">
-            <CalendarClock color="currentColor" size={18} />
+            <CalendarClock color={colors["ink-muted"]} size={18} />
           </View>
           <Text className="text-base text-ink" selectable>
             {when}
@@ -128,7 +114,7 @@ export function DoctorVisitCard({
         {type === "telehealth" ? (
           <View className="flex-row items-center gap-2">
             <View className="text-ink-muted">
-              <Video color="currentColor" size={18} />
+              <Video color={colors["ink-muted"]} size={18} />
             </View>
             <Text className="text-sm text-ink-muted">Video visit</Text>
           </View>
@@ -137,7 +123,7 @@ export function DoctorVisitCard({
         {room ? (
           <View className="flex-row items-center gap-2">
             <View className="text-ink-muted">
-              <MapPin color="currentColor" size={18} />
+              <MapPin color={colors["ink-muted"]} size={18} />
             </View>
             <Text className="text-sm text-ink" selectable>
               Room {room}
@@ -160,7 +146,8 @@ export function DoctorVisitCard({
                   : "Show reason and notes"
               }
               accessibilityRole="button"
-              className="min-h-10 flex-row items-center justify-between web:hover:opacity-80"
+              accessibilityState={{ expanded: clinicalOpen }}
+              className="min-h-11 flex-row items-center justify-between web:hover:opacity-80"
               onPress={() => setClinicalOpen((open) => !open)}
             >
               <Text className="text-sm font-semibold text-primary">
@@ -168,9 +155,9 @@ export function DoctorVisitCard({
               </Text>
               <View className="text-primary">
                 {clinicalOpen ? (
-                  <ChevronUp color="currentColor" size={18} />
+                  <ChevronUp color={colors.primary} size={18} />
                 ) : (
-                  <ChevronDown color="currentColor" size={18} />
+                  <ChevronDown color={colors.primary} size={18} />
                 )}
               </View>
             </Pressable>
@@ -203,7 +190,7 @@ export function DoctorVisitCard({
             onPress={onJoinTelehealth}
           >
             <View className="text-surface">
-              <Video color="currentColor" size={18} />
+              <Video color={colors.surface} size={18} />
             </View>
             <Text className="text-base font-semibold text-surface">
               {telehealthJoinLabel}

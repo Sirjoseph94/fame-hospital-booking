@@ -22,6 +22,7 @@ import {
   schedulingService,
 } from "@/lib/services/scheduling";
 import type { Appointment } from "@/types/scheduling";
+import { colors } from "@/lib/theme-colors";
 
 export default function BookConfirmationScreen() {
   const session = useSessionStore((state) => state.session);
@@ -244,7 +245,7 @@ export default function BookConfirmationScreen() {
           onPress={() => void confirm()}
         >
           {submitting ? (
-            <ActivityIndicator color="#FFFFFF" />
+            <ActivityIndicator color={colors.surface} />
           ) : (
             <Text className="text-base font-semibold text-surface">Confirm</Text>
           )}

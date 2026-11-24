@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, Text, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { ChevronLeft } from "lucide-react-native";
+import { View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 
+import { AdminDoctorHeader } from "@/components/admin/admin-doctor-header";
 import { DoctorSchedulePanel } from "@/components/doctor/doctor-schedule-panel";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { ScreenLoadingSkeleton } from "@/components/ui/skeleton";
@@ -10,13 +10,13 @@ import {
   SchedulingError,
   schedulingService,
 } from "@/lib/services/scheduling";
+import type { DoctorDetail } from "@/types/scheduling";
 
 export default function AdminDoctorScheduleScreen() {
-  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const doctorId = id ?? "";
 
-  const [doctorName, setDoctorName] = useState("Doctor");
+  const [doctor, setDoctor] = useState<DoctorDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,9 +29,7 @@ export default function AdminDoctorScheduleScreen() {
 
     setError(null);
     try {
-      const doctors = await schedulingService.listDoctors();
-      const doctor = doctors.find((row) => row.id === doctorId);
-      setDoctorName(doctor?.name ?? "Doctor");
+      setDoctor(await schedulingService.getDoctor(doctorId));
     } catch (cause) {
       setError(
         cause instanceof SchedulingError
@@ -50,20 +48,7 @@ export default function AdminDoctorScheduleScreen() {
 
   return (
     <View className="flex-1 bg-surface-muted">
-      <View className="flex-row items-center gap-2 px-4 pb-2 pt-2">
-        <Pressable
-          accessibilityLabel="Back to roster"
-          accessibilityRole="button"
-          className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface"
-          onPress={() => router.back()}
-        >
-          <ChevronLeft color="currentColor" size={24} />
-        </Pressable>
-        <View className="min-w-0 flex-1">
-          <Text className="text-lg font-semibold text-ink">{doctorName}</Text>
-          <Text className="text-sm text-ink-muted">Manage schedule</Text>
-        </View>
-      </View>
+      <AdminDoctorHeader doctor={doctor} subtitle="Manage schedule" />
 
       {loading ? (
         <ScreenLoadingSkeleton />

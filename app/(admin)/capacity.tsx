@@ -39,14 +39,13 @@ export default function AdminCapacityScreen() {
       ]);
       setBufferMinutes(settings.bufferMinutes);
 
-      const capacityRows = await Promise.all(
-        doctors.map(async (doctor) => {
-          const slots = await schedulingService.listSlotsOnDate(
-            doctor.id,
-            todayYmd,
-          );
-          return buildCapacityRow(doctor, slots);
-        }),
+      // One round trip for every doctor's slots (was ~4 requests per doctor).
+      const slotsByDoctor = await schedulingService.listSlotsOnDateForDoctors(
+        doctors.map((doctor) => doctor.id),
+        todayYmd,
+      );
+      const capacityRows = doctors.map((doctor) =>
+        buildCapacityRow(doctor, slotsByDoctor.get(doctor.id) ?? []),
       );
 
       setRows(

@@ -14,6 +14,7 @@ import { NotificationPreferencesCard } from "@/components/notifications/notifica
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { CardSkeleton, ScreenLoadingSkeleton } from "@/components/ui/skeleton";
@@ -157,39 +158,20 @@ export default function DoctorProfileScreen() {
               <Text className="text-sm font-medium text-ink">Department</Text>
               <Text className="text-base text-ink-muted">{department}</Text>
             </View>
-            <View className="gap-1">
-              <Text className="text-sm font-medium text-ink">Full name</Text>
-              <Controller
-                control={control}
-                name="fullName"
-                render={({ field: { onBlur, onChange, value } }) => (
-                  <FormTextInput
-                    accessibilityLabel="Full name"
-                    onBlur={onBlur}
-                    onChangeText={onChange}
-                    value={value}
-                  />
-                )}
-              />
-              <FieldError message={errors.fullName?.message} />
-            </View>
-            <View className="gap-1">
-              <Text className="text-sm font-medium text-ink">Phone (optional)</Text>
-              <Controller
-                control={control}
-                name="phone"
-                render={({ field: { onBlur, onChange, value } }) => (
-                  <FormTextInput
-                    accessibilityLabel="Phone number"
-                    kind="phone"
-                    onBlur={onBlur}
-                    onChangeText={onChange}
-                    value={value ?? ""}
-                  />
-                )}
-              />
-              <FieldError message={errors.phone?.message} />
-            </View>
+            <FormTextField
+              compact
+              control={control}
+              label="Full name"
+              name="fullName"
+            />
+            <FormTextField
+              compact
+              control={control}
+              label="Phone (optional)"
+              name="phone"
+              accessibilityLabel="Phone number"
+              kind="phone"
+            />
           </Card>
 
           {session?.userId ? (
@@ -201,39 +183,20 @@ export default function DoctorProfileScreen() {
 
           <Card style={{ gap: 12 }}>
             <Text className="text-base font-semibold text-ink">Practice</Text>
-            <View className="gap-1">
-              <Text className="text-sm font-medium text-ink">Specialty</Text>
-              <Controller
-                control={control}
-                name="specialty"
-                render={({ field: { onBlur, onChange, value } }) => (
-                  <FormTextInput
-                    accessibilityLabel="Specialty"
-                    onBlur={onBlur}
-                    onChangeText={onChange}
-                    value={value}
-                  />
-                )}
-              />
-              <FieldError message={errors.specialty?.message} />
-            </View>
-            <View className="gap-1">
-              <Text className="text-sm font-medium text-ink">Bio (optional)</Text>
-              <Controller
-                control={control}
-                name="bio"
-                render={({ field: { onBlur, onChange, value } }) => (
-                  <FormTextInput
-                    accessibilityLabel="Professional bio"
-                    kind="multiline"
-                    onBlur={onBlur}
-                    onChangeText={onChange}
-                    value={value ?? ""}
-                  />
-                )}
-              />
-              <FieldError message={errors.bio?.message} />
-            </View>
+            <FormTextField
+              compact
+              control={control}
+              label="Specialty"
+              name="specialty"
+            />
+            <FormTextField
+              compact
+              control={control}
+              label="Bio (optional)"
+              name="bio"
+              accessibilityLabel="Professional bio"
+              kind="multiline"
+            />
             <View className="gap-1">
               <Text className="text-sm font-medium text-ink">Years of experience</Text>
               <Controller

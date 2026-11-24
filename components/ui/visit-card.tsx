@@ -3,7 +3,8 @@ import { format, parseISO } from "date-fns";
 import { CalendarClock, MapPin, Video } from "lucide-react-native";
 
 import { Card } from "@/components/ui/card";
-import { visitStatusBadgeLabel } from "@/lib/visit-status-label";
+import { visitStatusLabel } from "@/lib/visit-status-label";
+import { colors } from "@/lib/theme-colors";
 import type {
   AppointmentDbStatus,
   AppointmentStatus,
@@ -50,7 +51,7 @@ export function VisitCard({
   onJoinTelehealth,
 }: VisitCardProps) {
   const when = format(parseISO(startsAt), "EEE, MMM d · h:mm a");
-  const badge = visitStatusBadgeLabel(status, dbStatus);
+  const badge = visitStatusLabel(status, dbStatus, "patient");
   const summary = `${badge} visit for ${beneficiaryName} with ${doctorName}`;
   const showTelehealthJoin =
     telehealthJoinLabel &&
@@ -78,7 +79,7 @@ export function VisitCard({
 
       <View className="flex-row items-center gap-2">
         <View className="text-ink-muted">
-          <CalendarClock color="currentColor" size={18} />
+          <CalendarClock color={colors["ink-muted"]} size={18} />
         </View>
         <Text className="text-base text-ink" selectable>
           {when}
@@ -90,7 +91,7 @@ export function VisitCard({
       {type === "in-clinic" && room ? (
         <View className="flex-row items-center gap-2">
           <View className="text-ink-muted">
-            <MapPin color="currentColor" size={18} />
+            <MapPin color={colors["ink-muted"]} size={18} />
           </View>
           <Text className="text-sm text-ink" selectable>
             Room {room}
@@ -101,7 +102,7 @@ export function VisitCard({
       {type === "home-visit" && address ? (
         <View className="flex-row items-center gap-2">
           <View className="text-ink-muted">
-            <MapPin color="currentColor" size={18} />
+            <MapPin color={colors["ink-muted"]} size={18} />
           </View>
           <Text className="text-sm text-ink" selectable>
             {address}
@@ -123,7 +124,7 @@ export function VisitCard({
           onPress={onJoinTelehealth}
         >
           <View className="text-surface">
-            <Video color="currentColor" size={18} />
+            <Video color={colors.surface} size={18} />
           </View>
           <Text className="text-base font-semibold text-surface">
             {telehealthJoinLabel}

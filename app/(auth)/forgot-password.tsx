@@ -7,13 +7,12 @@ import {
   View,
 } from "react-native";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Controller, useForm } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { Link } from "expo-router";
 import { z } from "zod";
 
 import { Card } from "@/components/ui/card";
-import { FieldError } from "@/components/ui/field-error";
-import { FormTextInput } from "@/components/ui/form-text-input";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { authService } from "@/lib/services/auth";
 
 const forgotPasswordSchema = z.object({
@@ -28,7 +27,7 @@ export default function ForgotPasswordScreen() {
   const {
     control,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { isSubmitting },
   } = useForm<ForgotPasswordFields>({
     resolver: zodResolver(forgotPasswordSchema),
     defaultValues: { email: "" },
@@ -91,23 +90,13 @@ export default function ForgotPasswordScreen() {
             </View>
           ) : (
             <>
-              <View className="gap-2">
-                <Text className="font-medium text-ink">Email</Text>
-                <Controller
-                  control={control}
-                  name="email"
-                  render={({ field: { onBlur, onChange, value } }) => (
-                    <FormTextInput
-                      accessibilityLabel="Email address"
-                      kind="email"
-                      onBlur={onBlur}
-                      onChangeText={onChange}
-                      value={value}
-                    />
-                  )}
-                />
-                <FieldError message={errors.email?.message} />
-              </View>
+              <FormTextField
+                control={control}
+                label="Email"
+                name="email"
+                accessibilityLabel="Email address"
+                kind="email"
+              />
 
               {submitError ? (
                 <Text

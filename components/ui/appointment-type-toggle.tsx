@@ -1,6 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 import { Building2, Home, Video } from "lucide-react-native";
 
+import { colors } from "@/lib/theme-colors";
 import type { AppointmentType } from "@/types/scheduling";
 
 interface AppointmentTypeToggleProps {
@@ -45,7 +46,7 @@ export function AppointmentTypeToggle({
             onPress={() => onChange(optionValue)}
           >
             <View className={selected ? "text-surface" : "text-ink"}>
-              <Icon color="currentColor" size={18} />
+              <Icon color={selected ? colors.surface : colors.ink} size={18} />
             </View>
             <Text
               className={[

@@ -38,6 +38,7 @@ import {
   availabilitySlotFormSchema,
   type AvailabilitySlotFormFields,
 } from "@/lib/validation/forms";
+import { colors } from "@/lib/theme-colors";
 import type { Slot, SlotStatus } from "@/types/scheduling";
 
 interface DoctorSchedulePanelProps {
@@ -110,16 +111,15 @@ export function DoctorSchedulePanel({
 
     setError(null);
     try {
-      const [slotRows, doctors] = await Promise.all([
+      const [slotRows, doctor] = await Promise.all([
         schedulingService.listScheduleSlotsOnDate(doctorId, dayYmd),
-        schedulingService.listDoctors(),
+        schedulingService.getDoctor(doctorId),
       ]);
       if (isStale()) {
         return;
       }
       setSlots(slotRows);
-      const doctor = doctors.find((row) => row.id === doctorId);
-      setAcceptingBookings(doctor?.isAcceptingBookings ?? true);
+      setAcceptingBookings(doctor.acceptingBookingsFlag);
     } catch (cause) {
       if (isStale()) {
         return;
@@ -189,7 +189,7 @@ export function DoctorSchedulePanel({
         doctorId,
         next,
       );
-      setAcceptingBookings(doctor.isAcceptingBookings);
+      setAcceptingBookings(doctor.acceptingBookingsFlag);
     } catch (cause) {
       setFormError(
         cause instanceof SchedulingError
@@ -310,7 +310,7 @@ export function DoctorSchedulePanel({
           disabled={!canGoToPreviousDay}
           onPress={() => shiftDay(-1)}
         >
-          <ChevronLeft color="currentColor" size={24} />
+          <ChevronLeft color={colors.ink} size={24} />
         </Pressable>
         <View className="items-center">
           <Text className="text-base font-semibold text-ink">
@@ -326,7 +326,7 @@ export function DoctorSchedulePanel({
           className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface"
           onPress={() => shiftDay(1)}
         >
-          <ChevronRight color="currentColor" size={24} />
+          <ChevronRight color={colors.ink} size={24} />
         </Pressable>
       </View>
 
@@ -369,7 +369,7 @@ export function DoctorSchedulePanel({
                         disabled: removingSlotId === slot.id,
                         busy: removingSlotId === slot.id,
                       }}
-                      className="min-h-10 justify-center rounded-lg border border-ink-muted px-3 web:hover:opacity-90"
+                      className="min-h-11 justify-center rounded-lg border border-ink-muted px-3 web:hover:opacity-90"
                       disabled={removingSlotId === slot.id}
                       onPress={() => void removeSlot(slot.id)}
                     >

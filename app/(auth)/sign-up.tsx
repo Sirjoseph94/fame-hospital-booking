@@ -13,8 +13,7 @@ import { z } from "zod";
 
 import { Card } from "@/components/ui/card";
 import { DatePickerField } from "@/components/ui/date-picker-field";
-import { FieldError } from "@/components/ui/field-error";
-import { FormTextInput } from "@/components/ui/form-text-input";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { GenderSelectField } from "@/components/ui/gender-select-field";
 import { authService } from "@/lib/services/auth";
 import { useSessionStore } from "@/lib/stores/session";
@@ -37,7 +36,7 @@ export default function SignUpScreen() {
   const {
     control,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { isSubmitting },
   } = useForm<SignUpFields>({
     resolver: zodResolver(signUpSchema),
     defaultValues: {
@@ -96,61 +95,29 @@ export default function SignUpScreen() {
         </View>
 
         <Card style={{ gap: 16 }}>
-          <View className="gap-2">
-            <Text className="font-medium text-ink">Full name</Text>
-            <Controller
-              control={control}
-              name="displayName"
-              render={({ field: { onBlur, onChange, value } }) => (
-                <FormTextInput
-                  accessibilityLabel="Full name"
-                  autoComplete="name"
-                  onBlur={onBlur}
-                  onChangeText={onChange}
-                  textContentType="name"
-                  value={value}
-                />
-              )}
-            />
-            <FieldError message={errors.displayName?.message} />
-          </View>
+          <FormTextField
+            control={control}
+            label="Full name"
+            name="displayName"
+            autoComplete="name"
+            textContentType="name"
+          />
 
-          <View className="gap-2">
-            <Text className="font-medium text-ink">Email</Text>
-            <Controller
-              control={control}
-              name="email"
-              render={({ field: { onBlur, onChange, value } }) => (
-                <FormTextInput
-                  accessibilityLabel="Email address"
-                  kind="email"
-                  onBlur={onBlur}
-                  onChangeText={onChange}
-                  value={value}
-                />
-              )}
-            />
-            <FieldError message={errors.email?.message} />
-          </View>
+          <FormTextField
+            control={control}
+            label="Email"
+            name="email"
+            accessibilityLabel="Email address"
+            kind="email"
+          />
 
-          <View className="gap-2">
-            <Text className="font-medium text-ink">Password</Text>
-            <Controller
-              control={control}
-              name="password"
-              render={({ field: { onBlur, onChange, value } }) => (
-                <FormTextInput
-                  accessibilityLabel="Password"
-                  autoComplete="new-password"
-                  kind="password"
-                  onBlur={onBlur}
-                  onChangeText={onChange}
-                  value={value}
-                />
-              )}
-            />
-            <FieldError message={errors.password?.message} />
-          </View>
+          <FormTextField
+            control={control}
+            label="Password"
+            name="password"
+            autoComplete="new-password"
+            kind="password"
+          />
 
           <Controller
             control={control}

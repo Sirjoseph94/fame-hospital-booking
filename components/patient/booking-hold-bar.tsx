@@ -43,7 +43,7 @@ export function BookingHoldBar() {
         <Pressable
           accessibilityLabel="Release this slot hold"
           accessibilityRole="button"
-          className="min-h-10 justify-center rounded-lg border border-primary px-3 web:hover:opacity-90"
+          className="min-h-11 justify-center rounded-lg border border-primary px-3 web:hover:opacity-90"
           onPress={release}
         >
           <Text className="text-sm font-semibold text-primary">Release</Text>

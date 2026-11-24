@@ -11,7 +11,7 @@ type FormTextInputKind =
   | "number"
   | "phone";
 
-interface FormTextInputProps extends TextInputProps {
+export interface FormTextInputProps extends TextInputProps {
   kind?: FormTextInputKind;
 }
 

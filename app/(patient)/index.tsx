@@ -470,7 +470,7 @@ export default function PatientHomeScreen() {
                   <Pressable
                     accessibilityLabel="Change doctor or visit type"
                     accessibilityRole="button"
-                    className="min-h-10 justify-center web:hover:opacity-80"
+                    className="min-h-11 justify-center web:hover:opacity-80"
                     onPress={() => {
                       if (!bookingBeneficiary) {
                         return;

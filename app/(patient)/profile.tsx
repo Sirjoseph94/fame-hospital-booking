@@ -15,6 +15,7 @@ import { NotificationPreferencesCard } from "@/components/notifications/notifica
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
+import { FormTextField } from "@/components/ui/form-text-field";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { CardSkeleton, ScreenLoadingSkeleton } from "@/components/ui/skeleton";
@@ -213,39 +214,20 @@ export default function PatientProfileScreen() {
                 {email}
               </Text>
             </View>
-            <View className="gap-1">
-              <Text className="text-sm font-medium text-ink">Full name</Text>
-              <Controller
-                control={control}
-                name="fullName"
-                render={({ field: { onBlur, onChange, value } }) => (
-                  <FormTextInput
-                    accessibilityLabel="Full name"
-                    onBlur={onBlur}
-                    onChangeText={onChange}
-                    value={value}
-                  />
-                )}
-              />
-              <FieldError message={errors.fullName?.message} />
-            </View>
-            <View className="gap-1">
-              <Text className="text-sm font-medium text-ink">Phone (optional)</Text>
-              <Controller
-                control={control}
-                name="phone"
-                render={({ field: { onBlur, onChange, value } }) => (
-                  <FormTextInput
-                    accessibilityLabel="Phone number"
-                    kind="phone"
-                    onBlur={onBlur}
-                    onChangeText={onChange}
-                    value={value ?? ""}
-                  />
-                )}
-              />
-              <FieldError message={errors.phone?.message} />
-            </View>
+            <FormTextField
+              compact
+              control={control}
+              label="Full name"
+              name="fullName"
+            />
+            <FormTextField
+              compact
+              control={control}
+              label="Phone (optional)"
+              name="phone"
+              accessibilityLabel="Phone number"
+              kind="phone"
+            />
           </Card>
 
           <Card style={{ gap: 12 }}>

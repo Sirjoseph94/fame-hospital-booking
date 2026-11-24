@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -6,7 +6,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { format, isToday, parseISO } from "date-fns";
+import { format, parseISO } from "date-fns";
 
 import * as Linking from "expo-linking";
 
@@ -23,12 +23,10 @@ import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
   SchedulingError,
   schedulingService,
+  type AppointmentListFilter,
 } from "@/lib/services/scheduling";
-import type {
-  Appointment,
-  AppointmentDbStatus,
-  AppointmentStatus,
-} from "@/types/scheduling";
+import { visitStatusLabel } from "@/lib/visit-status-label";
+import type { Appointment } from "@/types/scheduling";
 
 interface EnrichedAppointment extends Appointment {
   startsAt: string;
@@ -37,7 +35,7 @@ interface EnrichedAppointment extends Appointment {
   proxyTag?: string;
 }
 
-type AppointmentFilter = "all" | "today" | "pending" | "confirmed";
+type AppointmentFilter = AppointmentListFilter;
 
 const filters: { id: AppointmentFilter; label: string }[] = [
   { id: "all", label: "All" },
@@ -46,95 +44,87 @@ const filters: { id: AppointmentFilter; label: string }[] = [
   { id: "confirmed", label: "Confirmed" },
 ];
 
-function statusLabel(
-  status: AppointmentStatus,
-  dbStatus: AppointmentDbStatus,
-): string {
-  if (status === "completed") {
-    return "Completed";
-  }
-  if (status === "cancelled") {
-    return "Cancelled";
-  }
-  if (dbStatus === "pending") {
-    return "Pending";
-  }
-  if (dbStatus === "confirmed") {
-    return "Confirmed";
-  }
-  return "Upcoming";
-}
+const PAGE_SIZE = 50;
 
 export default function AdminAppointmentsScreen() {
   const [rows, setRows] = useState<EnrichedAppointment[]>([]);
   const [filter, setFilter] = useState<AppointmentFilter>("all");
+  const [hasMore, setHasMore] = useState(false);
+  // Server offset for the next page (rows may skip items without a start time).
+  const [nextOffset, setNextOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Re-render every minute so telehealth join windows stay current.
   useNow(60_000);
+  const requestIdRef = useRef(0);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const appointments = await schedulingService.listAllAppointments();
-      const [doctors, contextById] = await Promise.all([
-        schedulingService.listDoctors(),
-        schedulingService.enrichDoctorAgendaVisits(appointments),
-      ]);
+  /** Loads page `offset` for the current filter; offset 0 replaces the list. */
+  const loadPage = useCallback(
+    async (offset: number) => {
+      const requestId = ++requestIdRef.current;
+      const isStale = () => requestId !== requestIdRef.current;
 
-      const doctorNameById = new Map(doctors.map((doctor) => [doctor.id, doctor.name]));
-
-      const enriched: EnrichedAppointment[] = appointments.flatMap((appointment) => {
-        if (!appointment.startsAt) {
-          return [];
+      setError(null);
+      try {
+        const page = await schedulingService.listAppointmentsPage({
+          filter,
+          todayYmd: format(new Date(), "yyyy-MM-dd"),
+          offset,
+          limit: PAGE_SIZE,
+        });
+        const contextById = await schedulingService.enrichDoctorAgendaVisits(
+          page.items,
+        );
+        if (isStale()) {
+          return;
         }
-        const context = contextById.get(appointment.id);
-        return [
-          {
-            ...appointment,
-            startsAt: appointment.startsAt,
-            beneficiaryName: context?.beneficiaryName ?? "Patient",
-            doctorName: doctorNameById.get(appointment.doctorId) ?? "Doctor",
-            proxyTag: context?.proxyTag,
-          },
-        ];
-      });
 
-      setRows(enriched);
-    } catch (cause) {
-      setError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not load appointments.",
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+        const enriched: EnrichedAppointment[] = page.items.flatMap((appointment) => {
+          if (!appointment.startsAt) {
+            return [];
+          }
+          const context = contextById.get(appointment.id);
+          return [
+            {
+              ...appointment,
+              startsAt: appointment.startsAt,
+              beneficiaryName: context?.beneficiaryName ?? "Patient",
+              proxyTag: context?.proxyTag,
+            },
+          ];
+        });
+
+        setRows((previous) => (offset === 0 ? enriched : [...previous, ...enriched]));
+        setHasMore(page.hasMore);
+        setNextOffset(offset + page.items.length);
+      } catch (cause) {
+        if (isStale()) {
+          return;
+        }
+        setError(
+          cause instanceof SchedulingError
+            ? cause.message
+            : "Could not load appointments.",
+        );
+      } finally {
+        if (!isStale()) {
+          setLoading(false);
+          setLoadingMore(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [filter],
+  );
+
+  const load = useCallback(() => loadPage(0), [loadPage]);
 
   useEffect(() => {
     const task = setTimeout(() => void load(), 0);
     return () => clearTimeout(task);
   }, [load]);
-
-  const filtered = useMemo(() => {
-    const sorted = [...rows].sort(
-      (left, right) =>
-        parseISO(right.startsAt).getTime() - parseISO(left.startsAt).getTime(),
-    );
-    if (filter === "all") {
-      return sorted;
-    }
-    if (filter === "today") {
-      return sorted.filter((row) => isToday(parseISO(row.startsAt)));
-    }
-    if (filter === "pending") {
-      return sorted.filter((row) => row.dbStatus === "pending");
-    }
-    return sorted.filter((row) => row.dbStatus === "confirmed");
-  }, [filter, rows]);
 
   return (
     <View className="flex-1 bg-surface-muted">
@@ -171,10 +161,15 @@ export default function AdminAppointmentsScreen() {
                   accessibilityLabel={`Filter ${option.label}`}
                   accessibilityRole="button"
                   accessibilityState={{ selected }}
-                  className={`min-h-10 rounded-full px-4 py-2 ${
+                  className={`min-h-11 rounded-full px-4 py-2 ${
                     selected ? "bg-primary" : "border border-ink-muted bg-surface"
                   }`}
-                  onPress={() => setFilter(option.id)}
+                  onPress={() => {
+                    if (option.id !== filter) {
+                      setLoading(true);
+                      setFilter(option.id);
+                    }
+                  }}
                 >
                   <Text
                     className={`text-sm font-semibold ${
@@ -188,10 +183,10 @@ export default function AdminAppointmentsScreen() {
             })}
           </View>
 
-          {filtered.length === 0 ? (
+          {rows.length === 0 ? (
             <EmptyState message="No appointments match this filter." />
           ) : (
-            filtered.map((appointment) => {
+            rows.map((appointment) => {
               const when = format(parseISO(appointment.startsAt), "EEE, MMM d · h:mm a");
               const join =
                 appointment.type === "telehealth" &&
@@ -211,7 +206,7 @@ export default function AdminAppointmentsScreen() {
                     </View>
                     <View className="rounded-full bg-surface-muted px-3 py-1">
                       <Text className="text-xs font-semibold uppercase text-ink-muted">
-                        {statusLabel(appointment.status, appointment.dbStatus)}
+                        {visitStatusLabel(appointment.status, appointment.dbStatus, "admin")}
                       </Text>
                     </View>
                   </View>
@@ -243,6 +238,24 @@ export default function AdminAppointmentsScreen() {
               );
             })
           )}
+
+          {hasMore ? (
+            <Pressable
+              accessibilityLabel="Load more appointments"
+              accessibilityRole="button"
+              accessibilityState={{ busy: loadingMore }}
+              className="min-h-12 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
+              disabled={loadingMore}
+              onPress={() => {
+                setLoadingMore(true);
+                void loadPage(nextOffset);
+              }}
+            >
+              <Text className="font-semibold text-primary">
+                {loadingMore ? "Loading…" : "Load more"}
+              </Text>
+            </Pressable>
+          ) : null}
         </ScrollView>
       )}
     </View>

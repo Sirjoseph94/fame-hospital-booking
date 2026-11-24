@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
@@ -8,7 +8,14 @@ import {
   View,
 } from "react-native";
 import * as Linking from "expo-linking";
-import { addDays, format, startOfDay, subDays } from "date-fns";
+import {
+  addDays,
+  endOfWeek,
+  format,
+  startOfDay,
+  startOfWeek,
+  subDays,
+} from "date-fns";
 import { router, useFocusEffect } from "expo-router";
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
 
@@ -38,6 +45,7 @@ import {
   schedulingService,
 } from "@/lib/services/scheduling";
 import { useSessionStore } from "@/lib/stores/session";
+import { colors } from "@/lib/theme-colors";
 
 export default function DoctorAgendaScreen() {
   const session = useSessionStore((state) => state.session);
@@ -46,6 +54,7 @@ export default function DoctorAgendaScreen() {
   const [visits, setVisits] = useState<DoctorAgendaVisit[]>([]);
   const [bufferMinutes, setBufferMinutes] = useState(15);
   const [loading, setLoading] = useState(true);
+  const [rangeLoading, setRangeLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rescheduleTarget, setRescheduleTarget] =
@@ -61,20 +70,43 @@ export default function DoctorAgendaScreen() {
   // Re-render every minute so telehealth join windows stay current.
   useNow(60_000);
 
+  // Fetch one week at a time: moving between days in the same week needs no
+  // request; crossing into another week loads that week.
+  const weekFromYmd = format(
+    startOfWeek(selectedDay, { weekStartsOn: 1 }),
+    "yyyy-MM-dd",
+  );
+  const weekToYmd = format(
+    endOfWeek(selectedDay, { weekStartsOn: 1 }),
+    "yyyy-MM-dd",
+  );
+  const loadedWeekRef = useRef<string | null>(null);
+  const requestIdRef = useRef(0);
+
   const load = useCallback(async () => {
     if (!userId) {
       return;
+    }
+
+    const requestId = ++requestIdRef.current;
+    const isStale = () => requestId !== requestIdRef.current;
+    if (loadedWeekRef.current !== weekFromYmd) {
+      setRangeLoading(true);
     }
 
     setError(null);
     try {
       const appointments = await schedulingService.listDoctorAppointments(
         userId,
+        { fromYmd: weekFromYmd, toYmd: weekToYmd },
       );
       const [settings, contextById] = await Promise.all([
         schedulingService.getSettings(),
         schedulingService.enrichDoctorAgendaVisits(appointments),
       ]);
+      if (isStale()) {
+        return;
+      }
 
       setBufferMinutes(settings.bufferMinutes);
 
@@ -100,17 +132,24 @@ export default function DoctorAgendaScreen() {
       });
 
       setVisits(enriched);
+      loadedWeekRef.current = weekFromYmd;
     } catch (cause) {
+      if (isStale()) {
+        return;
+      }
       setError(
         cause instanceof SchedulingError
           ? cause.message
           : "Could not load your agenda.",
       );
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (!isStale()) {
+        setLoading(false);
+        setRangeLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [userId]);
+  }, [userId, weekFromYmd, weekToYmd]);
 
   // Runs on first focus and every time the tab regains focus.
   useFocusEffect(
@@ -306,7 +345,7 @@ export default function DoctorAgendaScreen() {
           className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface"
           onPress={() => shiftDay(-1)}
         >
-          <ChevronLeft color="currentColor" size={24} />
+          <ChevronLeft color={colors.ink} size={24} />
         </Pressable>
         <View className="items-center">
           <Text className="text-base font-semibold text-ink">
@@ -331,7 +370,7 @@ export default function DoctorAgendaScreen() {
           className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface"
           onPress={() => shiftDay(1)}
         >
-          <ChevronRight color="currentColor" size={24} />
+          <ChevronRight color={colors.ink} size={24} />
         </Pressable>
       </View>
 
@@ -370,7 +409,9 @@ export default function DoctorAgendaScreen() {
             />
           }
         >
-          {timeline.length === 0 ? (
+          {rangeLoading ? (
+            <VisitListSkeleton count={3} />
+          ) : timeline.length === 0 ? (
             <View className="gap-3">
               <EmptyState message="No visits scheduled for this day." />
               <Pressable
