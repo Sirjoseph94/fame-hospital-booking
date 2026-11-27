@@ -24,6 +24,10 @@
     },
     "android": {
       "package": "org.famehmrc.booking",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#EFF9F1"
+      },
       "permissions": [
         "android.permission.READ_CALENDAR",
         "android.permission.WRITE_CALENDAR"
@@ -31,6 +35,7 @@
     },
     "web": {
       "bundler": "metro",
+      "favicon": "./assets/favicon.png",
       "output": "single"
     },
     "plugins": [
