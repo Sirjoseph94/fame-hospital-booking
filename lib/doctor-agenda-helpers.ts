@@ -1,8 +1,9 @@
-import { addMinutes, format, isSameDay, isValid, parseISO } from "date-fns";
+import { format, isSameDay, isValid, parseISO } from "date-fns";
 
 import type {
   Appointment,
   BeneficiaryRelationship,
+  ClinicSession,
 } from "@/types/scheduling";
 
 export interface DoctorAgendaVisit extends Appointment {
@@ -14,14 +15,14 @@ export interface DoctorAgendaVisit extends Appointment {
   proxyTag?: string;
 }
 
-export type DoctorAgendaTimelineItem =
-  | { kind: "visit"; visit: DoctorAgendaVisit }
-  | {
-      kind: "buffer";
-      startsAt: string;
-      endsAt: string;
-      minutes: number;
-    };
+/** One session on the agenda with the patients booked into it. */
+export interface AgendaSessionGroup {
+  /** Null for older bookings that aren't attached to a session. */
+  session: ClinicSession | null;
+  /** Live bookings in booking order (the order they were made). */
+  visits: DoctorAgendaVisit[];
+  cancelled: DoctorAgendaVisit[];
+}
 
 export function doctorProxyTag(
   accountHolderName: string,
@@ -49,41 +50,39 @@ export function canDoctorMarkVisitComplete(
   return isValid(start) && start.getTime() <= now.getTime();
 }
 
-export function buildDoctorAgendaTimeline(
+/**
+ * Groups a day's visits under that day's sessions, in session order. Visits
+ * keep the order they arrive in (the service returns them in booking order).
+ * Sessions with no bookings are kept so the doctor sees every session.
+ */
+export function groupVisitsBySession(
   visits: DoctorAgendaVisit[],
-  bufferMinutes: number,
-): DoctorAgendaTimelineItem[] {
-  const sorted = [...visits].sort(
+  sessions: ClinicSession[],
+): AgendaSessionGroup[] {
+  const sortedSessions = [...sessions].sort(
     (left, right) =>
       parseISO(left.startsAt).getTime() - parseISO(right.startsAt).getTime(),
   );
+  const groups = new Map<string, AgendaSessionGroup>();
+  for (const session of sortedSessions) {
+    groups.set(session.id, { session, visits: [], cancelled: [] });
+  }
+  const unattached: AgendaSessionGroup = { session: null, visits: [], cancelled: [] };
 
-  const items: DoctorAgendaTimelineItem[] = [];
-
-  for (const visit of sorted) {
-    items.push({ kind: "visit", visit });
-
-    if (bufferMinutes <= 0 || visit.status === "cancelled") {
-      continue;
+  for (const visit of visits) {
+    const group = (visit.sessionId && groups.get(visit.sessionId)) || unattached;
+    if (visit.status === "cancelled") {
+      group.cancelled.push(visit);
+    } else {
+      group.visits.push(visit);
     }
-
-    const visitEnd = parseISO(visit.endsAt);
-    if (!isValid(visitEnd)) {
-      continue;
-    }
-
-    const bufferStart = visit.endsAt;
-    const bufferEnd = addMinutes(visitEnd, bufferMinutes).toISOString();
-
-    items.push({
-      kind: "buffer",
-      startsAt: bufferStart,
-      endsAt: bufferEnd,
-      minutes: bufferMinutes,
-    });
   }
 
-  return items;
+  const result = [...groups.values()];
+  if (unattached.visits.length > 0 || unattached.cancelled.length > 0) {
+    result.push(unattached);
+  }
+  return result;
 }
 
 export function formatAgendaDayLabel(day: Date): string {

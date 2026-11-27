@@ -5,7 +5,6 @@ import { router } from "expo-router";
 
 import { authService } from "@/lib/services/auth";
 import { notificationsService } from "@/lib/services/notifications";
-import { schedulingService } from "@/lib/services/scheduling";
 import { useBookingStore } from "@/lib/stores/booking";
 import { useSessionStore } from "@/lib/stores/session";
 import { colors } from "@/lib/theme-colors";
@@ -28,15 +27,7 @@ export function ShellHeader({ title }: ShellHeaderProps) {
     }
     signingOutRef.current = true;
     try {
-      const { slotId, hold, resetBookingDraft } = useBookingStore.getState();
-      if (slotId && hold) {
-        try {
-          await schedulingService.releaseHold(slotId);
-        } catch {
-          // Best-effort before clearing local session.
-        }
-      }
-      resetBookingDraft();
+      useBookingStore.getState().resetBookingDraft();
       try {
         await notificationsService.removeCachedPushTokenForCurrentUser();
       } catch {

@@ -22,15 +22,13 @@ export const queryKeys = {
     roster: ["doctors", "roster"] as const,
     detail: (doctorId: string) => ["doctors", "detail", doctorId] as const,
   },
-  slots: {
-    all: ["slots"] as const,
-    bookable: (doctorId: string) => ["slots", "bookable", doctorId] as const,
-    scheduleDay: (doctorId: string, dateYmd: string) =>
-      ["slots", "schedule", doctorId, dateYmd] as const,
-    capacityDay: (dateYmd: string) => ["slots", "capacity", dateYmd] as const,
+  sessions: {
+    all: ["sessions"] as const,
+    bookable: (doctorId: string) => ["sessions", "bookable", doctorId] as const,
+    doctorRange: (doctorId: string, fromYmd: string, toYmd: string) =>
+      ["sessions", "doctor", doctorId, fromYmd, toYmd] as const,
+    day: (dateYmd: string) => ["sessions", "day", dateYmd] as const,
   },
-  blackouts: (doctorId: string) => ["blackouts", doctorId] as const,
-  settings: ["settings"] as const,
   profile: {
     patient: (userId: string) => ["profile", "patient", userId] as const,
     doctor: (userId: string) => ["profile", "doctor", userId] as const,
@@ -41,13 +39,13 @@ export const queryKeys = {
 };
 
 /**
- * After anything that changes bookings or availability: appointments, slots
- * and doctors' next-available times can all be affected.
+ * After anything that changes bookings or sessions: appointments, session
+ * places and doctors' next open session can all be affected.
  */
 export function invalidateScheduling(queryClient: QueryClient): Promise<void> {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.appointments.all }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.slots.all }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all }),
     queryClient.invalidateQueries({ queryKey: queryKeys.doctors.all }),
   ]).then(() => undefined);
 }

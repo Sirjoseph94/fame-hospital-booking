@@ -47,7 +47,7 @@ export default function AdminDoctorScheduleScreen() {
       ) : (
         <DoctorSchedulePanel
           doctorId={doctorId}
-          intro="Hospital admin: add or remove open slots and control whether this doctor accepts new bookings."
+          intro="Hospital admin: add or cancel this doctor's clinic sessions and control whether they accept new bookings."
         />
       )}
     </View>

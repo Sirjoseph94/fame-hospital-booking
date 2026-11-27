@@ -11,5 +11,3 @@ function readSchedulingLatencyMs(): number {
 }
 
 export const schedulingLatencyMs = readSchedulingLatencyMs();
-export const holdDurationMs = 5 * 60 * 1000;
-export const holdDurationSeconds = holdDurationMs / 1000;

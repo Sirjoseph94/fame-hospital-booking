@@ -4,7 +4,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { accountsService } from "@/lib/services/accounts";
 import { schedulingService } from "@/lib/services/scheduling";
 
-/** Active doctors with their next open slot (patient booking, name lookups). */
+/** Active doctors with their next open session (patient booking, name lookups). */
 export function useDoctors() {
   return useQuery({
     queryKey: queryKeys.doctors.list,

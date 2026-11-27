@@ -1,167 +1,96 @@
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { formatSchedulingTimeRange } from "@/lib/format-scheduling-time";
-import { visitStatusLabel } from "@/lib/visit-status-label";
-import { CalendarClock, ChevronDown, ChevronUp, MapPin, Video } from "lucide-react-native";
+import { ChevronDown, ChevronUp } from "lucide-react-native";
 
 import { Card } from "@/components/ui/card";
+import { visitStatusLabel } from "@/lib/visit-status-label";
 import { colors } from "@/lib/theme-colors";
 import type {
   AppointmentDbStatus,
   AppointmentStatus,
-  AppointmentType,
 } from "@/types/scheduling";
 
 interface DoctorVisitCardProps {
+  /** 1-based booking number within the session (not the arrival order). */
+  position?: number;
   beneficiaryName: string;
+  /** Session start, for the status label. */
   startsAt: string;
-  endsAt: string;
-  type: AppointmentType;
   status: AppointmentStatus;
-  room?: string;
+  dbStatus?: AppointmentDbStatus;
   proxyTag?: string;
   reason?: string;
   notes?: string;
-  telehealthJoinLabel?: string;
-  onJoinTelehealth?: () => void;
-  dbStatus?: AppointmentDbStatus;
-  onConfirm?: () => void;
   onMarkComplete?: () => void;
-  onReschedule?: () => void;
   onCancel?: () => void;
   manageBusy?: boolean;
 }
 
-function typeLabel(type: AppointmentType): string {
-  if (type === "in-clinic") {
-    return "In clinic";
-  }
-  if (type === "telehealth") {
-    return "Telehealth";
-  }
-  return "Home visit";
-}
-
+/** One patient booked into a session, on the doctor's agenda. */
 export function DoctorVisitCard({
+  position,
   beneficiaryName,
   startsAt,
-  endsAt,
-  type,
   status,
-  room,
+  dbStatus,
   proxyTag,
   reason,
   notes,
-  telehealthJoinLabel,
-  onJoinTelehealth,
-  dbStatus,
-  onConfirm,
   onMarkComplete,
-  onReschedule,
   onCancel,
   manageBusy = false,
 }: DoctorVisitCardProps) {
-  const [clinicalOpen, setClinicalOpen] = useState(false);
-  const when = formatSchedulingTimeRange(startsAt, endsAt);
-  const summary = `${visitStatusLabel(status, dbStatus, "doctor")} visit with ${beneficiaryName}, ${when}`;
-  const showManageActions =
-    status === "upcoming" &&
-    Boolean(onConfirm || onMarkComplete || onReschedule || onCancel);
-  const pending = status === "upcoming" && dbStatus === "pending";
-  const clinicalSnippet = [reason?.trim(), notes?.trim()].filter(Boolean);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const statusLabel = visitStatusLabel(status, dbStatus, "doctor", startsAt);
+  const summary = `${position ? `Booking ${position}, ` : ""}${beneficiaryName}, ${statusLabel}`;
+  const details = [reason?.trim(), notes?.trim()].filter(Boolean);
+  const showActions = status === "upcoming" && Boolean(onMarkComplete || onCancel);
 
   return (
     <View accessibilityLabel={summary}>
-      <Card
-        style={{
-          gap: 12,
-          ...(pending
-            ? { borderWidth: 1, borderColor: colors.warning }
-            : {}),
-        }}
-      >
+      <Card style={{ gap: 10 }}>
         <View className="flex-row items-start justify-between gap-3">
-          <View className="min-w-0 flex-1 gap-1">
-            <Text className="text-base font-semibold text-ink" selectable>
-              {beneficiaryName}
-            </Text>
-            <Text className="text-sm text-ink-muted">{typeLabel(type)}</Text>
+          <View className="min-w-0 flex-1 flex-row items-start gap-3">
+            {position ? (
+              <View className="h-8 w-8 items-center justify-center rounded-full bg-surface-muted">
+                <Text className="text-sm font-semibold text-ink-muted">{position}</Text>
+              </View>
+            ) : null}
+            <View className="min-w-0 flex-1 gap-1">
+              <Text className="text-base font-semibold text-ink" selectable>
+                {beneficiaryName}
+              </Text>
+              {proxyTag ? (
+                <Text className="text-sm text-ink-muted" selectable>
+                  {proxyTag}
+                </Text>
+              ) : null}
+            </View>
           </View>
-          <View
-            className={`rounded-full px-3 py-1 ${
-              pending ? "bg-amber-100" : "bg-surface-muted"
-            }`}
-          >
-            <Text
-              className={`text-xs font-semibold uppercase ${
-                pending ? "text-amber-800" : "text-ink-muted"
-              }`}
-            >
-              {visitStatusLabel(status, dbStatus, "doctor")}
+          <View className="rounded-full bg-surface-muted px-3 py-1">
+            <Text className="text-xs font-semibold uppercase text-ink-muted">
+              {statusLabel}
             </Text>
           </View>
         </View>
 
-        <View className="flex-row items-center gap-2">
-          <View className="text-ink-muted">
-            <CalendarClock color={colors["ink-muted"]} size={18} />
-          </View>
-          <Text className="text-base text-ink" selectable>
-            {when}
-          </Text>
-        </View>
-
-        {type === "telehealth" ? (
-          <View className="flex-row items-center gap-2">
-            <View className="text-ink-muted">
-              <Video color={colors["ink-muted"]} size={18} />
-            </View>
-            <Text className="text-sm text-ink-muted">Video visit</Text>
-          </View>
-        ) : null}
-
-        {room ? (
-          <View className="flex-row items-center gap-2">
-            <View className="text-ink-muted">
-              <MapPin color={colors["ink-muted"]} size={18} />
-            </View>
-            <Text className="text-sm text-ink" selectable>
-              Room {room}
-            </Text>
-          </View>
-        ) : null}
-
-        {proxyTag ? (
-          <Text className="text-sm text-ink-muted" selectable>
-            {proxyTag}
-          </Text>
-        ) : null}
-
-        {clinicalSnippet.length > 0 ? (
+        {details.length > 0 ? (
           <View className="gap-2">
             <Pressable
-              accessibilityLabel={
-                clinicalOpen
-                  ? "Hide reason and notes"
-                  : "Show reason and notes"
-              }
+              accessibilityLabel={detailsOpen ? "Hide reason and notes" : "Show reason and notes"}
               accessibilityRole="button"
-              accessibilityState={{ expanded: clinicalOpen }}
+              accessibilityState={{ expanded: detailsOpen }}
               className="min-h-11 flex-row items-center justify-between web:hover:opacity-80"
-              onPress={() => setClinicalOpen((open) => !open)}
+              onPress={() => setDetailsOpen((open) => !open)}
             >
-              <Text className="text-sm font-semibold text-primary">
-                Reason & notes
-              </Text>
-              <View className="text-primary">
-                {clinicalOpen ? (
-                  <ChevronUp color={colors.primary} size={18} />
-                ) : (
-                  <ChevronDown color={colors.primary} size={18} />
-                )}
-              </View>
+              <Text className="text-sm font-semibold text-primary">Reason & notes</Text>
+              {detailsOpen ? (
+                <ChevronUp color={colors.primary} size={18} />
+              ) : (
+                <ChevronDown color={colors.primary} size={18} />
+              )}
             </Pressable>
-            {clinicalOpen ? (
+            {detailsOpen ? (
               <View className="gap-1">
                 {reason?.trim() ? (
                   <Text className="text-sm text-ink" selectable>
@@ -176,88 +105,38 @@ export function DoctorVisitCard({
               </View>
             ) : (
               <Text className="text-sm text-ink-muted" numberOfLines={1}>
-                {clinicalSnippet.join(" · ")}
+                {details.join(" · ")}
               </Text>
             )}
           </View>
         ) : null}
 
-        {telehealthJoinLabel && status === "upcoming" && type === "telehealth" ? (
-          <Pressable
-            accessibilityLabel={telehealthJoinLabel}
-            accessibilityRole="button"
-            className="min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-primary px-4 web:hover:opacity-90"
-            onPress={onJoinTelehealth}
-          >
-            <View className="text-surface">
-              <Video color={colors.surface} size={18} />
-            </View>
-            <Text className="text-base font-semibold text-surface">
-              {telehealthJoinLabel}
-            </Text>
-          </Pressable>
-        ) : null}
-
-        {showManageActions ? (
-          <View className="gap-2 border-t border-surface-muted pt-3">
-            {dbStatus === "pending" && onConfirm ? (
+        {showActions ? (
+          <View className="flex-row flex-wrap gap-2 border-t border-surface-muted pt-3">
+            {onMarkComplete ? (
               <Pressable
-                accessibilityLabel="Confirm appointment"
+                accessibilityLabel={`Mark ${beneficiaryName} seen`}
                 accessibilityRole="button"
                 accessibilityState={{ disabled: manageBusy, busy: manageBusy }}
-                className="min-h-12 items-center justify-center rounded-xl bg-primary px-4 web:hover:opacity-90"
-                disabled={manageBusy}
-                onPress={onConfirm}
-              >
-                <Text className="text-base font-semibold text-surface">
-                  Confirm appointment
-                </Text>
-              </Pressable>
-            ) : null}
-            {dbStatus === "confirmed" && onMarkComplete ? (
-              <Pressable
-                accessibilityLabel="Mark visit complete"
-                accessibilityRole="button"
-                accessibilityState={{ disabled: manageBusy, busy: manageBusy }}
-                className="min-h-12 items-center justify-center rounded-xl bg-primary px-4 web:hover:opacity-90"
+                className="min-h-12 flex-1 items-center justify-center rounded-xl bg-primary px-3 web:hover:opacity-90"
                 disabled={manageBusy}
                 onPress={onMarkComplete}
               >
-                <Text className="text-base font-semibold text-surface">
-                  Mark complete
-                </Text>
+                <Text className="text-sm font-semibold text-surface">Mark seen</Text>
               </Pressable>
             ) : null}
-            <View className="flex-row flex-wrap gap-2">
-              {onReschedule ? (
-                <Pressable
-                  accessibilityLabel="Reschedule appointment"
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: manageBusy, busy: manageBusy }}
-                  className="min-h-12 flex-1 items-center justify-center rounded-xl border border-primary px-3 web:hover:opacity-90"
-                  disabled={manageBusy}
-                  onPress={onReschedule}
-                >
-                  <Text className="text-sm font-semibold text-primary">
-                    Reschedule
-                  </Text>
-                </Pressable>
-              ) : null}
-              {onCancel ? (
-                <Pressable
-                  accessibilityLabel="Cancel appointment"
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: manageBusy, busy: manageBusy }}
-                  className="min-h-12 flex-1 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
-                  disabled={manageBusy}
-                  onPress={onCancel}
-                >
-                  <Text className="text-sm font-semibold text-ink-muted">
-                    Cancel
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
+            {onCancel ? (
+              <Pressable
+                accessibilityLabel={`Cancel ${beneficiaryName}'s booking`}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: manageBusy, busy: manageBusy }}
+                className="min-h-12 flex-1 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
+                disabled={manageBusy}
+                onPress={onCancel}
+              >
+                <Text className="text-sm font-semibold text-ink-muted">Cancel booking</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </Card>

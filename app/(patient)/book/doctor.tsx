@@ -6,7 +6,6 @@ import {
   View,
 } from "react-native";
 import { Stack, router } from "expo-router";
-import { format, parseISO } from "date-fns";
 
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { Card } from "@/components/ui/card";
@@ -17,6 +16,7 @@ import {
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
 import { useDoctors } from "@/lib/queries/doctors";
+import { formatSessionWhen, placesLeftLabel } from "@/lib/session-groups";
 import { useBookingStore } from "@/lib/stores/booking";
 import { useSessionStore } from "@/lib/stores/session";
 import { SchedulingError } from "@/lib/services/scheduling";
@@ -80,20 +80,20 @@ export default function BookDoctorScreen() {
               accessibilityRole="button"
               onPress={() => {
                 setDoctor(item.id, item.name);
-                router.push("/book/slot");
+                router.push("/book/session");
               }}
             >
               <Card style={{ gap: 6 }}>
                 <Text className="text-lg font-semibold text-ink">{item.name}</Text>
                 <Text className="text-sm text-ink-muted">{item.specialty}</Text>
                 <Text className="text-sm text-ink-muted">{item.department}</Text>
-                {item.nextAvailable ? (
+                {item.nextSession ? (
                   <Text className="text-sm text-available" selectable>
-                    Next available{" "}
-                    {format(parseISO(item.nextAvailable), "EEE, MMM d · h:mm a")}
+                    Next session {formatSessionWhen(item.nextSession)} ·{" "}
+                    {placesLeftLabel(item.nextSession.placesLeft)}
                   </Text>
                 ) : (
-                  <Text className="text-sm text-ink-muted">No open slots right now</Text>
+                  <Text className="text-sm text-ink-muted">No sessions open right now</Text>
                 )}
               </Card>
             </Pressable>

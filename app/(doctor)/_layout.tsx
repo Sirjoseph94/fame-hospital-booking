@@ -1,9 +1,4 @@
-import {
-  CalendarClock,
-  CalendarDays,
-  CalendarOff,
-  UserRound,
-} from "lucide-react-native";
+import { CalendarClock, CalendarDays, UserRound } from "lucide-react-native";
 import { Tabs } from "expo-router";
 
 import { RoleGuard } from "@/components/role-guard";
@@ -27,15 +22,6 @@ export default function DoctorLayout() {
             title: "Schedule",
             tabBarIcon: ({ color, size }) => (
               <CalendarDays color={color} size={size} />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="blackout"
-          options={{
-            title: "Blackout",
-            tabBarIcon: ({ color, size }) => (
-              <CalendarOff color={color} size={size} />
             ),
           }}
         />

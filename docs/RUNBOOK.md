@@ -62,6 +62,7 @@ The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). 
 | 13 | [`20260922000200_doctor_next_available_view.sql`](../supabase/migrations/20260922000200_doctor_next_available_view.sql) | `doctor_next_available_slots` view (one row per doctor, RLS-respecting) + slot index |
 | 14 | [`20260922000300_notification_retry.sql`](../supabase/migrations/20260922000300_notification_retry.sql) | `claimed_at` on `notification_deliveries` for retries / stuck-row recovery (see §12 sweep) |
 | 15 | [`20261127000000_account_deletion.sql`](../supabase/migrations/20261127000000_account_deletion.sql) | `delete_my_account()` RPC: patient self-service deletion (App Store / Google Play). Cancels upcoming visits, releases holds, deletes the auth user (data cascades). **Redeploy `dispatch-notifications`** (§12) with it so doctors' "visit cancelled" messages keep the visit details |
+| 16 | [`20261128000000_clinic_sessions.sql`](../supabase/migrations/20261128000000_clinic_sessions.sql) | **Clinic sessions** (first come, first served): `clinic_sessions`, `clinic_session_availability` and `doctor_next_open_session` views, RPCs `create_clinic_sessions`, `cancel_clinic_session`, `book_session`, `move_session_booking`; `hospital_settings.time_zone` (**set it**, see §6a). Notification trigger updated (`visit_booked`; doctors not messaged per patient). **Redeploy `dispatch-notifications`** (§12) |
 
 ### 2a. Existing databases (set up through the SQL Editor)
 
@@ -139,7 +140,7 @@ values ('DOCTOR_USER_UUID', 'General Practice', 'Pilot doctor', 0, 5, true)
 on conflict (id) do nothing;
 ```
 
-3. Sign in as that user and open **Schedule** to generate slots, **or** use commented templates in [`supabase/seed_pilot.sql`](../supabase/seed_pilot.sql) to insert `appointment_slots` manually.
+3. Sign in as that user and open **Schedule** to add clinic sessions (one-off or weekly), or have an admin do it from **Roster → Schedule**.
 
 ### 4b. Invite row + RPC (database only)
 
@@ -166,14 +167,35 @@ Goal: **one successful booking** end-to-end on web (appointment may stay **pendi
 |---|--------|----------|
 | 1 | Sign up as a new patient | Lands on patient Home; profile role `patient` |
 | 2 | Complete profile / self beneficiary if prompted | Booking can select “self” beneficiary |
-| 3 | **Book Appointment** → pick doctor → pick slot | Hold countdown (~5 minutes); slot moves to held |
+| 3 | **Book Appointment** → pick doctor → pick session | Sessions show places left; nothing is reserved until **Book** |
 | 4 | Intake → confirm | Success state; no hard error |
 | 5 | **My Visits** | New appointment visible (typically **pending**) |
-| 6 | *(Optional)* Sign in as doctor with slots on that day | Appointment appears on **Agenda** |
+| 6 | *(Optional)* Sign in as the doctor | Booking appears under that session on **Agenda**; session shows “1 / N booked” |
 
-If no doctors or slots appear, finish [§4 Doctor bootstrap](#4-doctor-bootstrap-until-phase-1-in-app-invites) and ensure `doctors.is_accepting_bookings = true` and slots are **`available`** with future date/time.
+If no doctors or sessions appear, finish [§4 Doctor bootstrap](#4-doctor-bootstrap-until-phase-1-in-app-invites) and ensure `doctors.is_accepting_bookings = true` and the doctor has a future session with places left.
 
 ---
+
+## 6a. Clinic sessions (migration step 16)
+
+Booking is by **clinic session**, first come, first served. A session is a doctor, a date, start/end times and a patient limit (1–200).
+
+| RPC | What it does |
+|---|---|
+| `create_clinic_sessions` | Doctor (own) or admin. One date, or weekly on chosen weekdays for 1–26 weeks. Skips dates that overlap an existing session or have already ended |
+| `cancel_clinic_session` | Doctor (own) or admin. Deletes a session nobody booked; otherwise marks it cancelled and cancels its bookings (patients notified) |
+| `book_session` | Patient books a place for themselves or a family member. Confirmed immediately. Refuses full, cancelled or ended sessions, a doctor not accepting bookings, and duplicate bookings for the same person |
+| `move_session_booking` | Moves a booking to another session of the same doctor (same checks) |
+
+Capacity is a live count of non-cancelled bookings, checked under a row lock on the session, so the last place can't be sold twice. Clients cannot write `clinic_sessions` or change `appointments.session_id` directly.
+
+**Set the hospital time zone** (session times are local wall-clock times; the database runs in UTC). It decides when a session has "ended" for booking:
+
+```sql
+update public.hospital_settings set time_zone = 'Africa/Lagos' where id = 1;  -- your IANA zone
+```
+
+The older slot, hold and blackout tables and RPCs below (§7) are no longer used by the app. They are left in place; a later migration can drop them.
 
 ## 7. Security notes (I-21, I-22) — Phase 7
 
@@ -229,7 +251,7 @@ Other changes:
 | “Invalid API key” / network errors | `.env` URL and anon key; restart dev server |
 | Login works but wrong screens | `profiles.role`; sign out/in; `is_active = true` |
 | No doctors in picker | `doctors` row exists, `is_active`, `is_accepting_bookings` |
-| No slots | Doctor **Schedule** tab or seed templates; slot `status = 'available'`, future date |
+| No sessions | Doctor **Schedule** tab (or admin **Roster → Schedule**); session `status = 'scheduled'`, not ended, places left. Wrong “ended” cut-off → check `hospital_settings.time_zone` (§6a) |
 | RLS errors in console | Migrations 1–4 applied; user authenticated |
 
 ---
@@ -268,12 +290,12 @@ Run on the **production** web URL after export/deploy:
 | Area | Check |
 |------|--------|
 | Ops | Migrations through step 8 applied (Phase 7 RPCs for production traffic) |
-| Onboarding | Admin invite → doctor claim → Schedule slots |
-| Patient book | Stepper + hold banner; grouped slots; confirm shows beneficiary |
-| Pending flow | Doctor agenda pending badge → confirm (room / video URL) |
+| Onboarding | Admin invite → doctor claim → Schedule: add weekly sessions |
+| Patient book | Doctor → session (places left) → details → Book; “You’re booked” shows the session and arrival note |
+| Sessions | Fill a session to its limit → it disappears for patients; cancel a booked session → patients get “visit cancelled” |
 | Lifecycle | Mark complete → patient Past |
 | Account | Forgot password; admin deactivate |
-| UX spot-check | Add dependent “Book now” vs “Add only”; remove future blackout |
+| UX spot-check | Add dependent “Book now” vs “Add only”; change session from My Visits |
 | Quality | `npm run typecheck` and `npm run lint` clean; `npm run export:web` succeeds |
 | Notifications | Opt-in on Profile → book / confirm / cancel → rows in `notification_deliveries` (`sent` or `skipped`) |
 

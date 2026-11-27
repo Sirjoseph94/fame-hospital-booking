@@ -5,7 +5,7 @@ import { useBookingStore } from "@/lib/stores/booking";
 
 const steps = [
   { segment: "doctor", label: "Doctor" },
-  { segment: "slot", label: "Time" },
+  { segment: "session", label: "Session" },
   { segment: "intake", label: "Details" },
   { segment: "confirmation", label: "Confirm" },
 ] as const;
@@ -19,8 +19,8 @@ function currentSegment(
   if (pathname.includes("/book/intake")) {
     return "intake";
   }
-  if (pathname.includes("/book/slot")) {
-    return "slot";
+  if (pathname.includes("/book/session")) {
+    return "session";
   }
   if (pathname.includes("/book/doctor")) {
     return "doctor";

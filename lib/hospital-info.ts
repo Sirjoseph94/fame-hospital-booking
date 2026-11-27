@@ -4,5 +4,5 @@ export const hospitalInfo = {
   email: "appointments@famehospital.example",
   hours: "Mon–Sat · 7:00 AM – 9:00 PM",
   about:
-    "FAME Hospital is a single-site enterprise scheduling platform. All visits take place at our main campus unless marked telehealth.",
+    "Book a place in a doctor's clinic session. Patients are seen in order of arrival at our main campus.",
 } as const;

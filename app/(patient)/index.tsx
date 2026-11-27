@@ -7,7 +7,6 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
-import * as Linking from "expo-linking";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { AddBeneficiarySheet } from "@/components/patient/add-beneficiary-sheet";
@@ -28,7 +27,6 @@ import { ShellHeader } from "@/components/shell-header";
 import { confirmAsync } from "@/lib/confirm";
 import { useNow } from "@/lib/hooks/use-now";
 import { useBreakpoint } from "@/lib/platform";
-import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
   doctorNameById,
   lastBookedDoctorId,
@@ -102,7 +100,7 @@ export default function PatientHomeScreen() {
   const [startingBooking, setStartingBooking] = useState(false);
   const startingBookingRef = useRef(false);
 
-  // Re-render every minute so telehealth join windows stay current.
+  // Re-render every minute so the next-visit card drops visits whose session ended.
   useNow(60_000);
 
   const beginReturningFlow = useBookingStore((state) => state.beginReturningFlow);
@@ -135,10 +133,7 @@ export default function PatientHomeScreen() {
     void Promise.all(homeQueries.map((query) => query.refetch()));
   };
 
-  const returningLine = useMemo((): {
-    doctorName: string;
-    appointmentType: Appointment["type"];
-  } | null => {
+  const returningLine = useMemo((): { doctorName: string } | null => {
     const self = pickSelfBeneficiary(beneficiaries);
     const lastBooking = lastBookedDoctorId(appointmentRows ?? []);
     const doctorName = lastBooking
@@ -150,14 +145,14 @@ export default function PatientHomeScreen() {
       lastBooking.appointmentType !== "home-visit" &&
       doctorName
     ) {
-      return { doctorName, appointmentType: lastBooking.appointmentType };
+      return { doctorName };
     }
     return null;
   }, [appointmentRows, beneficiaries, doctors]);
 
   const upcomingVisit = useMemo(() => {
     const next = nextUpcomingAppointment(appointmentRows ?? []);
-    if (!next?.startsAt) {
+    if (!next?.startsAt || !next.endsAt) {
       return null;
     }
     const beneficiary =
@@ -168,11 +163,8 @@ export default function PatientHomeScreen() {
       doctorName: doctorNameById(doctors, next.doctorId) ?? "Doctor",
       startsAt: next.startsAt,
       endsAt: next.endsAt,
-      type: next.type,
       dbStatus: next.dbStatus,
-      videoUrl: next.videoUrl,
       room: next.room,
-      address: next.address,
     };
   }, [appointmentRows, beneficiaries, doctors]);
 
@@ -265,9 +257,8 @@ export default function PatientHomeScreen() {
         beneficiaryId: self.id,
         doctorId: last.doctorId,
         doctorName: doctor.name,
-        appointmentType: last.appointmentType,
       });
-      router.push("/book/slot");
+      router.push("/book/session");
       return;
     }
 
@@ -434,37 +425,13 @@ export default function PatientHomeScreen() {
 
               {upcomingVisit ? (
                 <VisitCard
-                  address={upcomingVisit.address}
                   beneficiaryName={upcomingVisit.beneficiaryName}
                   dbStatus={upcomingVisit.dbStatus}
                   doctorName={upcomingVisit.doctorName}
+                  endsAt={upcomingVisit.endsAt}
                   room={upcomingVisit.room}
                   startsAt={upcomingVisit.startsAt}
                   status="upcoming"
-                  telehealthJoinLabel={
-                    upcomingVisit.type === "telehealth" &&
-                    upcomingVisit.dbStatus === "confirmed" &&
-                    upcomingVisit.videoUrl
-                      ? (() => {
-                          const join = telehealthJoinState(
-                            upcomingVisit.startsAt,
-                            upcomingVisit.endsAt,
-                          );
-                          return join.showJoin ? join.label : undefined;
-                        })()
-                      : undefined
-                  }
-                  type={upcomingVisit.type}
-                  onJoinTelehealth={() => {
-                    const url = upcomingVisit.videoUrl;
-                    if (!url) {
-                      AccessibilityInfo.announceForAccessibility(
-                        "Telehealth link is not ready yet.",
-                      );
-                      return;
-                    }
-                    void Linking.openURL(url);
-                  }}
                 />
               ) : (
                 <EmptyState message="No upcoming visits yet." title="Upcoming" />
@@ -488,11 +455,10 @@ export default function PatientHomeScreen() {
               bookingBeneficiary?.relationship === "self" ? (
                 <View className="gap-2">
                   <Text className="text-sm text-ink-muted">
-                    With {returningLine.doctorName} ·{" "}
-                    {returningLine.appointmentType.replace("-", " ")}
+                    Book again with {returningLine.doctorName}
                   </Text>
                   <Pressable
-                    accessibilityLabel="Change doctor or visit type"
+                    accessibilityLabel="Choose a different doctor"
                     accessibilityRole="button"
                     className="min-h-11 justify-center web:hover:opacity-80"
                     onPress={() => {
@@ -504,7 +470,7 @@ export default function PatientHomeScreen() {
                     }}
                   >
                     <Text className="text-sm font-semibold text-primary">
-                      Change doctor or visit type
+                      Choose a different doctor
                     </Text>
                   </Pressable>
                 </View>

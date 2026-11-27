@@ -2,7 +2,6 @@
 // keeps throwing stubs). Migrate to the object API (getCalendars,
 // calendar.createEvent) when convenient.
 import * as Calendar from "expo-calendar/legacy";
-import { format } from "date-fns";
 
 import { isNative, isWeb } from "@/lib/platform";
 import { hospitalInfo } from "@/lib/hospital-info";
@@ -15,10 +14,13 @@ export interface CalendarExportInput {
   durationMin: number;
   type: AppointmentType;
   room?: string;
+  /** Extra line for the event description. */
+  note?: string;
 }
 
-function toIcsDate(iso: string): string {
-  return `${format(new Date(iso), "yyyyMMdd'T'HHmmss")}Z`;
+/** UTC "yyyyMMddTHHmmssZ" (the trailing Z means the time must be UTC). */
+export function toIcsDate(iso: string): string {
+  return new Date(iso).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 }
 
 function buildIcsContent(input: CalendarExportInput): string {
@@ -28,6 +30,7 @@ function buildIcsContent(input: CalendarExportInput): string {
     `Appointment ID: ${input.appointmentId}`,
     `Visit type: ${input.type}`,
     input.room ? `Room: ${input.room}` : null,
+    input.note ?? null,
     hospitalInfo.about,
   ]
     .filter(Boolean)
@@ -100,7 +103,9 @@ export async function exportAppointmentToCalendar(
     title: input.title,
     startDate,
     endDate,
-    notes: `Appointment ID: ${input.appointmentId}`,
+    notes: [`Appointment ID: ${input.appointmentId}`, input.note]
+      .filter(Boolean)
+      .join("\n"),
     location: input.room ? `Room ${input.room}` : hospitalInfo.name,
   });
 

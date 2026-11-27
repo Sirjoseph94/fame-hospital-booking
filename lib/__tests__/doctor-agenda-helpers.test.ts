@@ -1,17 +1,24 @@
 import {
-  buildDoctorAgendaTimeline,
   canDoctorMarkVisitComplete,
   doctorProxyTag,
   filterVisitsForDay,
+  groupVisitsBySession,
   type DoctorAgendaVisit,
 } from "@/lib/doctor-agenda-helpers";
+import type { ClinicSession } from "@/types/scheduling";
 
-const visit = (id: string, startsAt: string, endsAt: string, status: DoctorAgendaVisit["status"] = "upcoming"): DoctorAgendaVisit => ({
+const visit = (
+  id: string,
+  startsAt: string,
+  endsAt: string,
+  status: DoctorAgendaVisit["status"] = "upcoming",
+  sessionId?: string,
+): DoctorAgendaVisit => ({
   id,
   accountHolderId: "u1",
   beneficiaryId: "b1",
   doctorId: "d1",
-  slotId: `slot-${id}`,
+  sessionId,
   type: "in-clinic",
   status,
   dbStatus: status === "cancelled" ? "cancelled" : "confirmed",
@@ -33,29 +40,46 @@ describe("doctor agenda helpers", () => {
     expect(filterVisitsForDay(visits, new Date("2026-11-24T12:00:00Z")).map((v) => v.id)).toEqual(["a"]);
   });
 
-  it("adds a buffer after each non-cancelled visit, sorted by start", () => {
-    const timeline = buildDoctorAgendaTimeline(
+  it("groups visits under their session, sessions in start order, empty sessions kept", () => {
+    const session = (id: string, startsAt: string, endsAt: string): ClinicSession => ({
+      id,
+      doctorId: "d1",
+      dateYmd: "2026-11-24",
+      startsAt,
+      endsAt,
+      capacity: 10,
+      bookedCount: 0,
+      placesLeft: 10,
+      status: "scheduled",
+      isBookable: true,
+    });
+    const am = session("am", "2026-11-24T09:00:00Z", "2026-11-24T12:00:00Z");
+    const pm = session("pm", "2026-11-24T14:00:00Z", "2026-11-24T17:00:00Z");
+    const empty = session("eve", "2026-11-24T18:00:00Z", "2026-11-24T19:00:00Z");
+
+    const groups = groupVisitsBySession(
       [
-        visit("late", "2026-11-24T11:00:00Z", "2026-11-24T11:30:00Z"),
-        visit("cancelled", "2026-11-24T10:00:00Z", "2026-11-24T10:30:00Z", "cancelled"),
-        visit("early", "2026-11-24T09:00:00Z", "2026-11-24T09:30:00Z"),
+        visit("first", am.startsAt, am.endsAt, "upcoming", "am"),
+        visit("gone", am.startsAt, am.endsAt, "cancelled", "am"),
+        visit("second", am.startsAt, am.endsAt, "upcoming", "am"),
+        visit("afternoon", pm.startsAt, pm.endsAt, "completed", "pm"),
+        visit("legacy", "2026-11-24T08:00:00Z", "2026-11-24T08:30:00Z"),
       ],
-      15,
+      [pm, empty, am],
     );
-    expect(timeline.map((i) => (i.kind === "visit" ? i.visit.id : `buffer@${i.startsAt}`))).toEqual([
-      "early",
-      "buffer@2026-11-24T09:30:00Z",
-      "cancelled",
-      "late",
-      "buffer@2026-11-24T11:30:00Z",
+
+    expect(
+      groups.map((g) => [g.session?.id ?? null, g.visits.map((v) => v.id), g.cancelled.map((v) => v.id)]),
+    ).toEqual([
+      ["am", ["first", "second"], ["gone"]],
+      ["pm", ["afternoon"], []],
+      ["eve", [], []],
+      [null, ["legacy"], []],
     ]);
-    const buffer = timeline[1];
-    expect(buffer).toMatchObject({ kind: "buffer", minutes: 15, endsAt: "2026-11-24T09:45:00.000Z" });
   });
 
-  it("adds no buffers when the buffer is zero", () => {
-    const timeline = buildDoctorAgendaTimeline([visit("a", "2026-11-24T09:00:00Z", "2026-11-24T09:30:00Z")], 0);
-    expect(timeline).toHaveLength(1);
+  it("adds no extra group when every visit has a session", () => {
+    expect(groupVisitsBySession([], [])).toEqual([]);
   });
 
   it("allows completing a visit only once it has started", () => {

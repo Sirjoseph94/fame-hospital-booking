@@ -20,7 +20,7 @@ export const privacyPolicy: LegalDocument = {
             "Profile details you choose to add: phone number, home address, emergency contact name and phone number, and a profile photo.",
             "Health details you choose to add: blood type, allergies, medications, medical conditions and medical notes.",
             "Family members you book for: their name, date of birth, gender and relationship to you.",
-            "Appointments: the doctor, date and time, visit type (in clinic, telehealth or home visit), the address for home visits, and any notes you write for the doctor.",
+            "Bookings: the doctor, the clinic session you booked, and any reason or notes you write for the doctor.",
           ],
         },
       ],

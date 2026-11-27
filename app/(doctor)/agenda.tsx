@@ -7,7 +7,6 @@ import {
   Text,
   View,
 } from "react-native";
-import * as Linking from "expo-linking";
 import {
   addDays,
   endOfWeek,
@@ -16,15 +15,12 @@ import {
   startOfWeek,
   subDays,
 } from "date-fns";
-import { useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
 
-import { ConfirmVisitSheet } from "@/components/doctor/confirm-visit-sheet";
-import { PostVisitBufferCard } from "@/components/doctor/post-visit-buffer-card";
 import { DoctorVisitCard } from "@/components/doctor/doctor-visit-card";
-import { RescheduleSheet } from "@/components/patient/reschedule-sheet";
 import { ShellHeader } from "@/components/shell-header";
+import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import {
@@ -35,24 +31,24 @@ import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { confirmAsync, showAlert } from "@/lib/confirm";
 import { useHasLoadedOnce } from "@/lib/hooks/use-has-loaded-once";
 import { useNow } from "@/lib/hooks/use-now";
-import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
-  buildDoctorAgendaTimeline,
   canDoctorMarkVisitComplete,
   filterVisitsForDay,
   formatAgendaDayLabel,
+  groupVisitsBySession,
+  type AgendaSessionGroup,
   type DoctorAgendaVisit,
 } from "@/lib/doctor-agenda-helpers";
 import {
   useCancelAppointment,
   useCompleteDoctorAppointment,
-  useConfirmDoctorAppointment,
   useDoctorAgenda,
 } from "@/lib/queries/appointments";
-import { useSchedulingSettings } from "@/lib/queries/settings";
+import { useDoctorSessions } from "@/lib/queries/sessions";
 import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { SchedulingError } from "@/lib/services/scheduling";
+import { formatSessionTimes } from "@/lib/session-groups";
 import { useSessionStore } from "@/lib/stores/session";
 import { colors } from "@/lib/theme-colors";
 
@@ -65,70 +61,46 @@ function errorMessage(cause: unknown): string {
 export default function DoctorAgendaScreen() {
   const session = useSessionStore((state) => state.session);
   const userId = session?.userId;
-  const queryClient = useQueryClient();
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
   const [userRefreshing, setUserRefreshing] = useState(false);
-  const [rescheduleTarget, setRescheduleTarget] =
-    useState<DoctorAgendaVisit | null>(null);
   const [actionBanner, setActionBanner] = useState<string | null>(null);
-  const [confirmTarget, setConfirmTarget] = useState<DoctorAgendaVisit | null>(
-    null,
-  );
-  const [confirmError, setConfirmError] = useState<string | null>(null);
 
-  // Re-render every minute so telehealth join windows stay current.
+  // "Mark seen" unlocks when a session starts.
   useNow(60_000);
 
-  // Fetch one week at a time: moving between days in the same week needs no
-  // request; crossing into another week loads that week.
-  const weekFromYmd = format(
-    startOfWeek(selectedDay, { weekStartsOn: 1 }),
-    "yyyy-MM-dd",
-  );
-  const weekToYmd = format(
-    endOfWeek(selectedDay, { weekStartsOn: 1 }),
-    "yyyy-MM-dd",
-  );
+  // One week per request: moving between days in the same week needs no fetch.
+  const weekFromYmd = format(startOfWeek(selectedDay, { weekStartsOn: 1 }), "yyyy-MM-dd");
+  const weekToYmd = format(endOfWeek(selectedDay, { weekStartsOn: 1 }), "yyyy-MM-dd");
+  const dayYmd = format(selectedDay, "yyyy-MM-dd");
 
   const agendaQuery = useDoctorAgenda(userId, weekFromYmd, weekToYmd);
-  const settingsQuery = useSchedulingSettings();
-  const confirmMutation = useConfirmDoctorAppointment();
+  const sessionsQuery = useDoctorSessions(userId, weekFromYmd, weekToYmd);
   const completeMutation = useCompleteDoctorAppointment();
   const cancelMutation = useCancelAppointment();
 
-  // Refetch (if stale) every time the tab regains focus.
   useRefreshOnFocus([
     queryKeys.appointments.doctorRange(userId ?? "", weekFromYmd, weekToYmd),
-    queryKeys.settings,
+    queryKeys.sessions.doctorRange(userId ?? "", weekFromYmd, weekToYmd),
   ]);
 
   const visits = agendaQuery.data;
-  const bufferMinutes = settingsQuery.data?.bufferMinutes ?? 15;
-  // Full-screen skeleton only for the very first load; a newly selected week
-  // with no cached data shows the inline list skeleton instead.
-  const hasLoadedOnce = useHasLoadedOnce(visits !== undefined);
-  const initialLoading =
-    settingsQuery.isPending || (agendaQuery.isPending && !hasLoadedOnce);
-  const weekLoading = agendaQuery.isPending;
+  const sessions = sessionsQuery.data;
+  const loaded = visits !== undefined && sessions !== undefined;
+  // Full-screen skeleton only on the very first load; a newly selected week
+  // shows the inline skeleton instead.
+  const hasLoadedOnce = useHasLoadedOnce(loaded);
+  const weekLoading = agendaQuery.isPending || sessionsQuery.isPending;
+  const initialLoading = weekLoading && !hasLoadedOnce;
 
-  const blockingError =
-    (agendaQuery.error && !visits ? agendaQuery.error : null) ??
-    (settingsQuery.error && !settingsQuery.data ? settingsQuery.error : null);
-  const refreshError = agendaQuery.error && visits ? agendaQuery.error : null;
+  const firstError = agendaQuery.error ?? sessionsQuery.error;
+  const blockingError = firstError && !loaded ? firstError : null;
+  const refreshError = firstError && loaded ? firstError : null;
 
-  const retry = () => {
-    if (agendaQuery.isError) {
-      void agendaQuery.refetch();
-    }
-    if (settingsQuery.isError) {
-      void settingsQuery.refetch();
-    }
-  };
-
+  const refetchAll = () => Promise.all([agendaQuery.refetch(), sessionsQuery.refetch()]);
   const refresh = async () => {
     setUserRefreshing(true);
     try {
-      await Promise.all([agendaQuery.refetch(), settingsQuery.refetch()]);
+      await refetchAll();
     } finally {
       setUserRefreshing(false);
     }
@@ -140,76 +112,27 @@ export default function DoctorAgendaScreen() {
       ? cancelMutation.variables
       : null;
 
-  const dayVisits = useMemo(
-    () => filterVisitsForDay(visits ?? [], selectedDay),
-    [selectedDay, visits],
+  const groups = useMemo(
+    () =>
+      groupVisitsBySession(
+        filterVisitsForDay(visits ?? [], selectedDay),
+        (sessions ?? []).filter((row) => row.dateYmd === dayYmd),
+      ),
+    [dayYmd, selectedDay, sessions, visits],
   );
 
-  const timeline = useMemo(
-    () =>
-      buildDoctorAgendaTimeline(
-        dayVisits.filter((visit) => visit.status !== "cancelled"),
-        bufferMinutes,
-      ),
-    [bufferMinutes, dayVisits],
-  );
+  const isToday = dayYmd === format(new Date(), "yyyy-MM-dd");
+  const bookedToday = groups.reduce((sum, group) => sum + group.visits.length, 0);
 
   const shiftDay = (delta: number) => {
-    setSelectedDay((current) =>
-      delta < 0 ? subDays(current, 1) : addDays(current, 1),
-    );
+    setSelectedDay((current) => (delta < 0 ? subDays(current, 1) : addDays(current, 1)));
   };
 
-  const isToday = format(selectedDay, "yyyy-MM-dd") === format(new Date(), "yyyy-MM-dd");
-
-  const pendingTodayCount = useMemo(() => {
-    if (!isToday) {
-      return 0;
-    }
-    return dayVisits.filter(
-      (visit) =>
-        visit.status === "upcoming" && visit.dbStatus === "pending",
-    ).length;
-  }, [dayVisits, isToday]);
-
-  const confirmVisit = (visit: DoctorAgendaVisit) => {
-    setConfirmError(null);
-    setConfirmTarget(visit);
-  };
-
-  const submitConfirmVisit = async (values: {
-    room: string;
-    videoUrl: string;
-  }) => {
-    if (!confirmTarget) {
-      return;
-    }
-    setConfirmError(null);
-    try {
-      await confirmMutation.mutateAsync({
-        appointmentId: confirmTarget.id,
-        details: {
-          room: values.room,
-          videoUrl: values.videoUrl,
-        },
-      });
-      setConfirmTarget(null);
-      setActionBanner("Appointment confirmed.");
-      AccessibilityInfo.announceForAccessibility("Appointment confirmed.");
-    } catch (cause) {
-      setConfirmError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not confirm the appointment.",
-      );
-    }
-  };
-
-  const markVisitComplete = async (visit: DoctorAgendaVisit) => {
+  const markSeen = async (visit: DoctorAgendaVisit) => {
     const confirmed = await confirmAsync({
-      title: "Mark visit complete?",
-      message: "The patient will see this visit in their Past tab.",
-      confirmText: "Mark complete",
+      title: `Mark ${visit.beneficiaryName} seen?`,
+      message: "The patient will see this visit as completed.",
+      confirmText: "Mark seen",
       cancelText: "Not yet",
     });
     if (!confirmed) {
@@ -218,23 +141,22 @@ export default function DoctorAgendaScreen() {
     setActionBanner(null);
     try {
       await completeMutation.mutateAsync(visit.id);
-      setActionBanner("Visit marked complete.");
+      setActionBanner(`${visit.beneficiaryName} marked seen.`);
       AccessibilityInfo.announceForAccessibility("Visit marked complete.");
     } catch (cause) {
-      const message =
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not mark the visit complete.";
-      showAlert("Could not complete visit", message);
+      showAlert(
+        "Could not update visit",
+        cause instanceof SchedulingError ? cause.message : "Could not mark the visit complete.",
+      );
     }
   };
 
-  const cancelVisit = async (visit: DoctorAgendaVisit) => {
+  const cancelBooking = async (visit: DoctorAgendaVisit) => {
     const confirmed = await confirmAsync({
-      title: "Cancel appointment?",
-      message: "The patient will be notified and the slot will reopen.",
-      confirmText: "Cancel appointment",
-      cancelText: "Keep appointment",
+      title: "Cancel this booking?",
+      message: `${visit.beneficiaryName} will be notified and their place released.`,
+      confirmText: "Cancel booking",
+      cancelText: "Keep booking",
       destructive: true,
     });
     if (!confirmed) {
@@ -243,66 +165,85 @@ export default function DoctorAgendaScreen() {
     setActionBanner(null);
     try {
       await cancelMutation.mutateAsync(visit.id);
-      setActionBanner("Appointment cancelled.");
-      AccessibilityInfo.announceForAccessibility("Appointment cancelled.");
+      setActionBanner("Booking cancelled.");
+      AccessibilityInfo.announceForAccessibility("Booking cancelled.");
     } catch (cause) {
-      const message =
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not cancel the appointment.";
-      showAlert("Cancel failed", message);
+      showAlert(
+        "Cancel failed",
+        cause instanceof SchedulingError ? cause.message : "Could not cancel the booking.",
+      );
     }
   };
 
-  const joinTelehealth = (visit: DoctorAgendaVisit) => {
-    const url = visit.videoUrl;
-    if (!url) {
-      showAlert("Join unavailable", "This telehealth link is not ready yet.");
-      return;
-    }
-    void Linking.openURL(url);
-  };
-
-  const renderVisitCard = (visit: DoctorAgendaVisit) => {
-    const join =
-      visit.type === "telehealth" && visit.status === "upcoming"
-        ? telehealthJoinState(visit.startsAt, visit.endsAt)
-        : { showJoin: false, label: "" };
-
-    const canManage = visit.status === "upcoming";
-    const canMarkComplete =
-      canManage &&
-      visit.dbStatus === "confirmed" &&
-      canDoctorMarkVisitComplete(visit.startsAt);
+  const renderGroup = (group: AgendaSessionGroup, index: number) => {
+    const sessionInfo = group.session;
+    const cancelled = sessionInfo?.status === "cancelled";
+    const title = sessionInfo ? formatSessionTimes(sessionInfo) : "Other bookings";
+    const key = sessionInfo?.id ?? `unattached-${index}`;
 
     return (
-      <DoctorVisitCard
-        beneficiaryName={visit.beneficiaryName}
-        dbStatus={visit.dbStatus}
-        endsAt={visit.endsAt}
-        manageBusy={manageBusyId === visit.id}
-        notes={visit.notes}
-        proxyTag={visit.proxyTag}
-        reason={visit.reason}
-        room={visit.room}
-        startsAt={visit.startsAt}
-        status={visit.status}
-        telehealthJoinLabel={join.showJoin ? join.label : undefined}
-        type={visit.type}
-        onCancel={canManage ? () => void cancelVisit(visit) : undefined}
-        onConfirm={
-          canManage && visit.dbStatus === "pending"
-            ? () => confirmVisit(visit)
-            : undefined
-        }
-        onJoinTelehealth={() => joinTelehealth(visit)}
-        onMarkComplete={
-          canMarkComplete ? () => void markVisitComplete(visit) : undefined
-        }
-        onReschedule={
-          canManage ? () => setRescheduleTarget(visit) : undefined
-        }
-      />
+      <View key={key} className="gap-3">
+        <Card style={{ gap: 4 }}>
+          <View className="flex-row items-center justify-between gap-3">
+            <Text accessibilityRole="header" className="text-base font-semibold text-ink">
+              {title}
+            </Text>
+            {sessionInfo ? (
+              <Text className={`text-sm font-semibold ${cancelled ? "text-danger" : "text-ink-muted"}`}>
+                {cancelled ? "Cancelled" : `${sessionInfo.bookedCount} / ${sessionInfo.capacity} booked`}
+              </Text>
+            ) : null}
+          </View>
+          {cancelled && sessionInfo?.cancelReason ? (
+            <Text className="text-sm text-ink-muted" selectable>
+              Reason: {sessionInfo.cancelReason}
+            </Text>
+          ) : null}
+          {!cancelled && group.visits.length > 0 ? (
+            <Text className="text-sm text-ink-muted">
+              Listed in booking order. Patients are seen in order of arrival.
+            </Text>
+          ) : null}
+        </Card>
+
+        {group.visits.length === 0 && !cancelled ? (
+          <Text className="px-1 text-sm text-ink-muted">No bookings yet.</Text>
+        ) : null}
+
+        {group.visits.map((visit, position) => {
+          const canManage = visit.status === "upcoming";
+          return (
+            <DoctorVisitCard
+              key={visit.id}
+              beneficiaryName={visit.beneficiaryName}
+              dbStatus={visit.dbStatus}
+              manageBusy={manageBusyId === visit.id}
+              notes={visit.notes}
+              position={position + 1}
+              proxyTag={visit.proxyTag}
+              reason={visit.reason}
+              startsAt={visit.startsAt}
+              status={visit.status}
+              onCancel={canManage ? () => void cancelBooking(visit) : undefined}
+              onMarkComplete={
+                canManage &&
+                visit.dbStatus === "confirmed" &&
+                canDoctorMarkVisitComplete(visit.startsAt)
+                  ? () => void markSeen(visit)
+                  : undefined
+              }
+            />
+          );
+        })}
+
+        {group.cancelled.length > 0 ? (
+          <Text className="px-1 text-sm text-ink-muted">
+            {group.cancelled.length} cancelled{" "}
+            {group.cancelled.length === 1 ? "booking" : "bookings"}:{" "}
+            {group.cancelled.map((visit) => visit.beneficiaryName).join(", ")}
+          </Text>
+        ) : null}
+      </View>
     );
   };
 
@@ -323,18 +264,12 @@ export default function DoctorAgendaScreen() {
           <Text className="text-base font-semibold text-ink">
             {formatAgendaDayLabel(selectedDay)}
           </Text>
-          {isToday ? (
-            <Text className="text-sm text-ink-muted">
-              Today
-              {pendingTodayCount > 0
-                ? ` · ${pendingTodayCount} need confirmation`
-                : ""}
-            </Text>
-          ) : (
-            <Text className="text-sm text-ink-muted" selectable>
-              {format(selectedDay, "yyyy-MM-dd")}
-            </Text>
-          )}
+          <Text className="text-sm text-ink-muted">
+            {isToday ? "Today" : dayYmd}
+            {!weekLoading && groups.length > 0
+              ? ` · ${bookedToday} ${bookedToday === 1 ? "patient" : "patients"} booked`
+              : ""}
+          </Text>
         </View>
         <Pressable
           accessibilityLabel="Next day"
@@ -346,15 +281,8 @@ export default function DoctorAgendaScreen() {
         </Pressable>
       </View>
 
-      <Text className="px-4 pb-3 text-sm text-ink-muted">
-        Post-visit buffers ({bufferMinutes} min) match hospital booking rules and
-        are not patient appointments.
-      </Text>
       {actionBanner ? (
-        <Text
-          accessibilityLiveRegion="polite"
-          className="px-4 pb-2 text-sm text-primary"
-        >
+        <Text accessibilityLiveRegion="polite" className="px-4 pb-2 text-sm text-primary">
           {actionBanner}
         </Text>
       ) : null}
@@ -368,7 +296,7 @@ export default function DoctorAgendaScreen() {
         <View className="flex-1 justify-center px-4">
           <SchedulingStatePanel
             message={errorMessage(blockingError)}
-            onRetry={retry}
+            onRetry={() => void refetchAll()}
           />
         </View>
       ) : initialLoading ? (
@@ -377,110 +305,31 @@ export default function DoctorAgendaScreen() {
         </ScreenLoadingSkeleton>
       ) : (
         <ScrollView
-          contentContainerClassName="gap-3 px-4 pb-8"
+          contentContainerClassName="gap-5 px-4 pb-8"
           contentInsetAdjustmentBehavior="automatic"
           refreshControl={
-            <RefreshControl
-              refreshing={userRefreshing}
-              onRefresh={() => void refresh()}
-            />
+            <RefreshControl refreshing={userRefreshing} onRefresh={() => void refresh()} />
           }
         >
           {weekLoading ? (
             <VisitListSkeleton count={3} />
-          ) : timeline.length === 0 ? (
+          ) : groups.length === 0 ? (
             <View className="gap-3">
-              <EmptyState message="No visits scheduled for this day." />
+              <EmptyState message="No clinic sessions on this day." />
               <Pressable
-                accessibilityLabel="Open schedule to add availability"
+                accessibilityLabel="Open schedule to add sessions"
                 accessibilityRole="button"
                 className="min-h-12 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
                 onPress={() => router.push("/schedule")}
               >
-                <Text className="font-semibold text-primary">
-                  Add slots in Schedule
-                </Text>
+                <Text className="font-semibold text-primary">Add sessions in Schedule</Text>
               </Pressable>
             </View>
           ) : (
-            timeline.map((item, index) => {
-              if (item.kind === "buffer") {
-                return (
-                  <PostVisitBufferCard
-                    key={`buffer-${item.startsAt}-${item.endsAt}-${index}`}
-                    endsAt={item.endsAt}
-                    minutes={item.minutes}
-                    startsAt={item.startsAt}
-                  />
-                );
-              }
-
-              return (
-                <View key={item.visit.id}>{renderVisitCard(item.visit)}</View>
-              );
-            })
+            groups.map(renderGroup)
           )}
-
-          {!weekLoading &&
-          dayVisits.some((visit) => visit.status === "cancelled") ? (
-            <View className="gap-3 pt-2">
-              <Text className="text-sm font-semibold text-ink-muted">Cancelled</Text>
-              {dayVisits
-                .filter((visit) => visit.status === "cancelled")
-                .map((visit) => (
-                  <View key={`cancelled-${visit.id}`}>
-                    {renderVisitCard(visit)}
-                  </View>
-                ))}
-            </View>
-          ) : null}
         </ScrollView>
       )}
-
-      {rescheduleTarget && session ? (
-        <RescheduleSheet
-          appointmentId={rescheduleTarget.id}
-          currentSlotId={rescheduleTarget.slotId}
-          doctorId={session.userId}
-          doctorName={session.displayName}
-          open={Boolean(rescheduleTarget)}
-          onOpenChange={(open) => {
-            if (!open) {
-              setRescheduleTarget(null);
-            }
-          }}
-          onRescheduled={() => {
-            setActionBanner("Appointment rescheduled.");
-            AccessibilityInfo.announceForAccessibility("Appointment rescheduled.");
-            // The reschedule sheet isn't owned by this screen; make sure the
-            // agenda picks up the move without restarting a refetch it may
-            // already have triggered itself.
-            void queryClient.invalidateQueries(
-              { queryKey: queryKeys.appointments.all },
-              { cancelRefetch: false },
-            );
-          }}
-        />
-      ) : null}
-
-      {confirmTarget ? (
-        <ConfirmVisitSheet
-          key={confirmTarget.id}
-          appointmentType={confirmTarget.type}
-          beneficiaryName={confirmTarget.beneficiaryName}
-          errorMessage={confirmError}
-          homeVisitAddress={confirmTarget.address}
-          open={Boolean(confirmTarget)}
-          submitting={confirmMutation.isPending}
-          onConfirm={submitConfirmVisit}
-          onOpenChange={(open) => {
-            if (!open) {
-              setConfirmTarget(null);
-              setConfirmError(null);
-            }
-          }}
-        />
-      ) : null}
     </View>
   );
 }

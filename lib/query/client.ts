@@ -14,7 +14,7 @@ function isRetryable(error: unknown): boolean {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Scheduling data changes often (other patients book slots), so keep
+      // Scheduling data changes often (other patients book places), so keep
       // this short; screens also refresh stale data when they regain focus.
       staleTime: 30_000,
       gcTime: 10 * 60_000,

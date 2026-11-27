@@ -405,4 +405,190 @@ select t.ok((select count(*) from public.notification_deliveries
                and payload->>'patientName' = 'Remy') = 3,
   'doctor still gets "visit cancelled" (3 channels) with visit details in payload');
 
+-- ---------------------------------------------------------------- clinic sessions
+-- D = doctor, P (b1 + "Kid") and Q (b2) = patients, AD = admin.
+reset role;
+select set_config('request.jwt.claims', '', false);
+create temp table s_ids (k text primary key, id uuid);
+grant all on s_ids to public;
+-- Make "today" agree between current_date (used below) and hospital_now().
+update public.hospital_settings set time_zone = current_setting('TimeZone') where id = 1;
+
+-- Patients cannot create sessions.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.create_clinic_sessions('00000000-0000-0000-0000-0000000000d1', current_date + 7, 1,
+  array[extract(dow from current_date + 7)::int], '09:00', '12:00', 2)->>'code' = 'FORBIDDEN',
+  'patient cannot create clinic sessions');
+reset role;
+
+-- Doctor creates a weekly session for 2 weeks (capacity 2).
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.create_clinic_sessions('00000000-0000-0000-0000-0000000000d1', current_date + 7, 2,
+  array[extract(dow from current_date + 7)::int], '09:00', '12:00', 2)->>'created')::int = 2,
+  'doctor creates 2 weekly sessions');
+select t.ok((public.create_clinic_sessions('00000000-0000-0000-0000-0000000000d1', current_date + 7, 2,
+  array[extract(dow from current_date + 7)::int], '10:00', '11:00', 5)->>'skipped')::int = 2,
+  'overlapping sessions on the same day are skipped');
+select t.ok(public.create_clinic_sessions('00000000-0000-0000-0000-0000000000d1', current_date + 7, 1,
+  array[1], '12:00', '09:00', 2)->>'code' = 'INVALID_INPUT',
+  'end time before start time is rejected');
+select t.ok(public.create_clinic_sessions('00000000-0000-0000-0000-0000000000d1', current_date - 1, 1,
+  array[1], '09:00', '12:00', 2)->>'code' = 'INVALID_INPUT',
+  'sessions cannot start in the past');
+do $$ begin
+  begin
+    insert into public.clinic_sessions (doctor_id, session_date, start_time, end_time, capacity)
+    values (auth.uid(), current_date + 30, '09:00', '10:00', 5);
+    raise exception 'FAIL: doctor inserted a session directly';
+  exception when insufficient_privilege then raise notice 'PASS: sessions can only be created through the RPC'; end;
+end $$;
+insert into s_ids
+select 'S' || row_number() over (order by session_date), id
+from public.clinic_sessions
+where doctor_id = auth.uid() and start_time = '09:00' and session_date >= current_date + 7;
+reset role;
+
+-- P books S1 for themselves; duplicate and someone else's family member are refused.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((select places_left from public.clinic_session_availability where session_id = (select id from s_ids where k = 'S1')) = 2,
+  'patient sees places left before booking');
+insert into s_ids
+select 'P1', (public.book_session((select id from s_ids where k = 'S1'), '00000000-0000-0000-0000-0000000000b1', 'cough')->>'appointment_id')::uuid;
+select t.ok((select status from public.appointments where id = (select id from s_ids where k = 'P1')) = 'confirmed',
+  'session booking is confirmed straight away');
+select t.ok(public.book_session((select id from s_ids where k = 'S1'), '00000000-0000-0000-0000-0000000000b1')->>'code' = 'ALREADY_BOOKED',
+  'same person cannot book the same session twice');
+select t.ok(public.book_session((select id from s_ids where k = 'S1'), '00000000-0000-0000-0000-0000000000b2')->>'code' = 'FORBIDDEN',
+  'cannot book for another account''s family member');
+select t.ok(public.book_session((select id from s_ids where k = 'S1'), '00000000-0000-0000-0000-0000000000b1', repeat('x', 201))->>'code' = 'INVALID_INPUT',
+  'reason longer than 200 characters is rejected');
+reset role;
+
+-- Q takes the last place; P's child is then refused.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a2","email":"q@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.book_session((select id from s_ids where k = 'S1'), '00000000-0000-0000-0000-0000000000b2')->>'success')::boolean,
+  'second patient books the last place');
+select t.ok((select places_left from public.clinic_session_availability where session_id = (select id from s_ids where k = 'S1')) = 0
+  and not (select is_bookable from public.clinic_session_availability where session_id = (select id from s_ids where k = 'S1')),
+  'full session shows 0 places and is not bookable');
+select t.ok(public.move_session_booking((select id from s_ids where k = 'P1'), (select id from s_ids where k = 'S2'))->>'code' = 'FORBIDDEN',
+  'patient cannot move someone else''s booking');
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.book_session((select id from s_ids where k = 'S1'),
+  (select id from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child' limit 1))->>'code' = 'SESSION_FULL',
+  'booking a full session is refused');
+
+-- P moves to S2.
+select t.ok((public.move_session_booking((select id from s_ids where k = 'P1'), (select id from s_ids where k = 'S2'))->>'success')::boolean,
+  'patient moves own booking to another session');
+select t.ok((select session_id from public.appointments where id = (select id from s_ids where k = 'P1')) = (select id from s_ids where k = 'S2')
+  and (select appointment_date from public.appointments where id = (select id from s_ids where k = 'P1')) = current_date + 14,
+  'move updates the session and the visit date');
+select t.ok((select places_left from public.clinic_session_availability where session_id = (select id from s_ids where k = 'S1')) = 1,
+  'moving frees a place in the old session');
+reset role;
+
+-- Notifications: patient gets "booked" + "rescheduled"; doctor gets nothing per patient.
+select t.ok((select count(*) from public.notification_deliveries
+             where appointment_id = (select id from s_ids where k = 'P1') and event_type = 'visit_booked'
+               and recipient_id = '00000000-0000-0000-0000-0000000000a1') = 3,
+  'patient is sent "visit booked" (3 channels)');
+select t.ok((select count(*) from public.notification_deliveries
+             where appointment_id = (select id from s_ids where k = 'P1') and event_type = 'visit_rescheduled') = 3,
+  'patient is sent "visit rescheduled" after a move');
+select t.ok(not exists (select 1 from public.notification_deliveries
+             where appointment_id = (select id from s_ids where k = 'P1')
+               and recipient_id = '00000000-0000-0000-0000-0000000000d1'),
+  'doctor is not messaged per patient for session bookings');
+
+-- Clients can't change session_id directly.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+do $$ begin
+  begin
+    update public.appointments set session_id = (select id from s_ids where k = 'S1')
+    where id = (select id from s_ids where k = 'P1');
+    raise exception 'FAIL: doctor changed session_id directly';
+  exception when insufficient_privilege then raise notice 'PASS: session_id can only change through move_session_booking'; end;
+end $$;
+
+-- Doctor cancels S2 (P is booked): booking cancelled, patient notified.
+select t.ok((public.cancel_clinic_session((select id from s_ids where k = 'S2'), 'Conference')->>'cancelled_bookings')::int = 1,
+  'cancelling a session cancels its bookings');
+select t.ok((select status from public.appointments where id = (select id from s_ids where k = 'P1')) = 'cancelled'
+  and (select status from public.clinic_sessions where id = (select id from s_ids where k = 'S2')) = 'cancelled',
+  'booking and session are both cancelled');
+select t.ok(public.cancel_clinic_session((select id from s_ids where k = 'S2'))->>'code' = 'NOT_MODIFIABLE',
+  'a cancelled session cannot be cancelled again');
+
+-- An empty session is removed instead of cancelled.
+select t.ok((public.create_clinic_sessions(auth.uid(), current_date + 40, 1,
+  array[extract(dow from current_date + 40)::int], '14:00', '15:00', 3)->>'created')::int = 1, 'doctor creates a one-off session');
+select t.ok((public.cancel_clinic_session((select id from public.clinic_sessions
+  where doctor_id = auth.uid() and session_date = current_date + 40))->>'removed')::boolean,
+  'cancelling an unbooked session removes it');
+
+-- Not accepting bookings blocks new bookings.
+update public.doctors set is_accepting_bookings = false where id = auth.uid();
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.book_session((select id from s_ids where k = 'S1'),
+  (select id from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child' limit 1))->>'code' = 'DOCTOR_UNAVAILABLE',
+  'doctor not accepting bookings: booking refused');
+select t.ok(public.book_session((select id from s_ids where k = 'S2'), '00000000-0000-0000-0000-0000000000b1')->>'code' = 'SESSION_UNAVAILABLE',
+  'cancelled session cannot be booked');
+select t.ok(public.cancel_clinic_session((select id from s_ids where k = 'S1'))->>'code' = 'FORBIDDEN',
+  'patient cannot cancel a session');
+reset role;
+update public.doctors set is_accepting_bookings = true where id = '00000000-0000-0000-0000-0000000000d1';
+
+-- A session that has already ended cannot be booked.
+insert into public.clinic_sessions (id, doctor_id, session_date, start_time, end_time, capacity)
+values ('00000000-0000-0000-0000-0000000005e0', '00000000-0000-0000-0000-0000000000d1', current_date - 1, '09:00', '10:00', 5);
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.book_session('00000000-0000-0000-0000-0000000005e0', '00000000-0000-0000-0000-0000000000b1')->>'code' = 'SESSION_UNAVAILABLE',
+  'ended session cannot be booked');
+select t.ok((select session_id from public.doctor_next_open_session where doctor_id = '00000000-0000-0000-0000-0000000000d1')
+  = (select id from s_ids where k = 'S1'),
+  'next open session is the earliest bookable one (skips ended and cancelled)');
+reset role;
+
+-- Admin can manage any doctor's sessions; anon can't book.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.create_clinic_sessions('00000000-0000-0000-0000-0000000000d1', current_date + 50, 1,
+  array[extract(dow from current_date + 50)::int], '09:00', '10:00', 4)->>'created')::int = 1,
+  'admin creates a session for a doctor');
+reset role;
+set role anon;
+do $$ begin
+  begin
+    perform public.book_session(gen_random_uuid(), gen_random_uuid());
+    raise exception 'FAIL: anon called book_session';
+  exception when insufficient_privilege then raise notice 'PASS: anon cannot call book_session'; end;
+  begin
+    perform 1 from public.clinic_session_availability;
+    raise exception 'FAIL: anon read session availability';
+  exception when insufficient_privilege then raise notice 'PASS: anon cannot read session availability'; end;
+end $$;
+reset role;
+
+-- Deactivated accounts see no availability.
+update public.profiles set is_active = false where id = '00000000-0000-0000-0000-0000000000a2';
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a2","email":"q@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((select count(*) from public.clinic_session_availability) = 0, 'deactivated user sees no session availability');
+select t.ok((select count(*) from public.clinic_sessions) = 0, 'deactivated user cannot read sessions');
+reset role;
+update public.profiles set is_active = true where id = '00000000-0000-0000-0000-0000000000a2';
+
 \echo ALL TESTS PASSED

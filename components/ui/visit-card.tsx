@@ -1,63 +1,42 @@
 import { Pressable, Text, View } from "react-native";
-import { format, parseISO } from "date-fns";
-import { CalendarClock, MapPin, Video } from "lucide-react-native";
+import { CalendarClock, MapPin } from "lucide-react-native";
 
 import { Card } from "@/components/ui/card";
+import { formatSessionWhen } from "@/lib/session-groups";
 import { visitStatusLabel } from "@/lib/visit-status-label";
 import { colors } from "@/lib/theme-colors";
 import type {
   AppointmentDbStatus,
   AppointmentStatus,
-  AppointmentType,
 } from "@/types/scheduling";
 
 interface VisitCardProps {
   beneficiaryName: string;
   doctorName: string;
+  /** Session window. */
   startsAt: string;
-  type: AppointmentType;
+  endsAt: string;
   status: AppointmentStatus;
   dbStatus?: AppointmentDbStatus;
   room?: string;
-  address?: string;
   proxyTag?: string;
-  telehealthJoinLabel?: string;
   onPress?: () => void;
-  onJoinTelehealth?: () => void;
-}
-
-function typeLabel(type: AppointmentType): string {
-  if (type === "in-clinic") {
-    return "In clinic";
-  }
-  if (type === "telehealth") {
-    return "Telehealth";
-  }
-  return "Home visit";
 }
 
 export function VisitCard({
   beneficiaryName,
   doctorName,
   startsAt,
-  type,
+  endsAt,
   status,
   dbStatus,
   room,
-  address,
   proxyTag,
-  telehealthJoinLabel,
   onPress,
-  onJoinTelehealth,
 }: VisitCardProps) {
-  const when = format(parseISO(startsAt), "EEE, MMM d · h:mm a");
+  const when = formatSessionWhen({ startsAt, endsAt });
   const badge = visitStatusLabel(status, dbStatus, "patient", startsAt);
-  const summary = `${badge} visit for ${beneficiaryName} with ${doctorName}`;
-  const showTelehealthJoin =
-    telehealthJoinLabel &&
-    status === "upcoming" &&
-    type === "telehealth" &&
-    dbStatus === "confirmed";
+  const summary = `${badge} visit for ${beneficiaryName} with ${doctorName}, ${when}`;
 
   const body = (
     <Card style={{ gap: 12 }}>
@@ -78,34 +57,23 @@ export function VisitCard({
       </View>
 
       <View className="flex-row items-center gap-2">
-        <View className="text-ink-muted">
-          <CalendarClock color={colors["ink-muted"]} size={18} />
-        </View>
-        <Text className="text-base text-ink" selectable>
+        <CalendarClock color={colors["ink-muted"]} size={18} />
+        <Text className="min-w-0 flex-1 text-base text-ink" selectable>
           {when}
         </Text>
       </View>
 
-      <Text className="text-sm text-ink-muted">{typeLabel(type)}</Text>
-
-      {type === "in-clinic" && room ? (
-        <View className="flex-row items-center gap-2">
-          <View className="text-ink-muted">
-            <MapPin color={colors["ink-muted"]} size={18} />
-          </View>
-          <Text className="text-sm text-ink" selectable>
-            Room {room}
-          </Text>
-        </View>
+      {status === "upcoming" ? (
+        <Text className="text-sm text-ink-muted">
+          Seen in order of arrival. Come early and check in at reception.
+        </Text>
       ) : null}
 
-      {type === "home-visit" && address ? (
+      {room ? (
         <View className="flex-row items-center gap-2">
-          <View className="text-ink-muted">
-            <MapPin color={colors["ink-muted"]} size={18} />
-          </View>
+          <MapPin color={colors["ink-muted"]} size={18} />
           <Text className="text-sm text-ink" selectable>
-            {address}
+            Room {room}
           </Text>
         </View>
       ) : null}
@@ -115,29 +83,11 @@ export function VisitCard({
           {proxyTag}
         </Text>
       ) : null}
-
-      {showTelehealthJoin ? (
-        <Pressable
-          accessibilityLabel={telehealthJoinLabel}
-          accessibilityRole="button"
-          className="min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-primary px-4 web:hover:opacity-90"
-          onPress={onJoinTelehealth}
-        >
-          <View className="text-surface">
-            <Video color={colors.surface} size={18} />
-          </View>
-          <Text className="text-base font-semibold text-surface">
-            {telehealthJoinLabel}
-          </Text>
-        </Pressable>
-      ) : null}
     </Card>
   );
 
   if (!onPress) {
-    return (
-      <View accessibilityLabel={summary}>{body}</View>
-    );
+    return <View accessibilityLabel={summary}>{body}</View>;
   }
 
   return (

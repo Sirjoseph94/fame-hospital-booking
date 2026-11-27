@@ -38,12 +38,6 @@ export const genderSchema = z.enum(["female", "male"], {
 
 export type GenderValue = z.infer<typeof genderSchema>;
 
-export const bufferMinutesSchema = z
-  .number()
-  .int("Use a whole number.")
-  .min(0, "Buffer cannot be negative.")
-  .max(120, "Buffer cannot exceed 120 minutes.");
-
 export function parseTimeOnDate(dateYmd: string, timeHm: string): Date {
   return parseISO(`${dateYmd}T${timeHm}:00`);
 }
@@ -52,69 +46,54 @@ export function toIsoDateTimeFromForm(dateYmd: string, timeHm: string): string {
   return parseTimeOnDate(dateYmd, timeHm).toISOString();
 }
 
-export const blackoutFormSchema = z
+export const clinicSessionFormSchema = z
   .object({
-    slotDate: scheduleDateSchema,
+    firstDate: scheduleDateSchema,
     startTime: timeHmSchema,
     endTime: timeHmSchema,
-    reason: z.string().trim().min(3, "Add a short reason."),
+    capacity: z
+      .string()
+      .trim()
+      .regex(/^\d+$/, "Enter a number of patients.")
+      .refine((value) => {
+        const count = Number.parseInt(value, 10);
+        return count >= 1 && count <= 200;
+      }, "Between 1 and 200 patients."),
+    repeatWeekly: z.boolean(),
+    /** 0 = Sunday … 6 = Saturday; used when repeatWeekly is on. */
+    weekdays: z.array(z.number().int().min(0).max(6)),
+    weeks: z
+      .string()
+      .trim()
+      .regex(/^\d+$/, "Enter a number of weeks.")
+      .refine((value) => {
+        const count = Number.parseInt(value, 10);
+        return count >= 1 && count <= 26;
+      }, "Between 1 and 26 weeks."),
   })
   .refine(
     (values) =>
       isAfter(
-        parseTimeOnDate(values.slotDate, values.endTime),
-        parseTimeOnDate(values.slotDate, values.startTime),
-      ),
-    { message: "End time must be after start time.", path: ["endTime"] },
-  )
-  .refine(
-    (values) =>
-      parseTimeOnDate(values.slotDate, values.startTime).getTime() >=
-      Date.now(),
-    {
-      message: "Blackout cannot start in the past.",
-      path: ["startTime"],
-    },
-  );
-
-export type BlackoutFormFields = z.infer<typeof blackoutFormSchema>;
-
-export const availabilitySlotFormSchema = z
-  .object({
-    slotDate: scheduleDateSchema,
-    startTime: timeHmSchema,
-    endTime: timeHmSchema,
-  })
-  .refine(
-    (values) =>
-      isAfter(
-        parseTimeOnDate(values.slotDate, values.endTime),
-        parseTimeOnDate(values.slotDate, values.startTime),
+        parseTimeOnDate(values.firstDate, values.endTime),
+        parseTimeOnDate(values.firstDate, values.startTime),
       ),
     { message: "End time must be after start time.", path: ["endTime"] },
   )
   .refine(
     (values) => {
-      const start = parseTimeOnDate(values.slotDate, values.startTime);
-      const end = parseTimeOnDate(values.slotDate, values.endTime);
+      const start = parseTimeOnDate(values.firstDate, values.startTime);
+      const end = parseTimeOnDate(values.firstDate, values.endTime);
       const minutes = (end.getTime() - start.getTime()) / 60_000;
-      return minutes >= 15 && minutes <= 240;
+      return minutes >= 30 && minutes <= 12 * 60;
     },
     {
-      message: "Each open slot must be between 15 minutes and 4 hours.",
+      message: "A session must be between 30 minutes and 12 hours.",
       path: ["endTime"],
     },
   )
-  .refine(
-    (values) =>
-      parseTimeOnDate(values.slotDate, values.startTime).getTime() >=
-      Date.now(),
-    {
-      message: "Start time must be in the future.",
-      path: ["startTime"],
-    },
-  );
+  .refine((values) => !values.repeatWeekly || values.weekdays.length > 0, {
+    message: "Choose at least one day of the week.",
+    path: ["weekdays"],
+  });
 
-export type AvailabilitySlotFormFields = z.infer<
-  typeof availabilitySlotFormSchema
->;
+export type ClinicSessionFormFields = z.infer<typeof clinicSessionFormSchema>;

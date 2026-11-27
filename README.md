@@ -9,9 +9,9 @@ Requires Node 22.13+, 24.3+ or 26+ (odd-numbered Node releases are not supported
 - Supabase sign-in and patient registration
 - Persisted session (SecureStore on native, `localStorage` on web)
 - Role-guarded route groups: Patient, Doctor, Admin
-- Full booking flow: doctors, slots, holds, beneficiaries, appointments
+- Clinic sessions, first come, first served: doctors (or admins) create sessions with a patient limit, one-off or weekly; patients book a place instantly, for themselves or a family member, and can change session or cancel
 - Doctor agenda/schedule, admin roster, capacity, and appointment views
-- Enterprise scheduling schema: beneficiaries, slot holds, blackouts, hospital buffer settings
+- Scheduling schema: `clinic_sessions`, capacity-checked booking RPCs, beneficiaries (legacy slot/hold/blackout tables remain but are unused)
 
 Pilot deployment steps, migration order, and smoke tests live in **[docs/RUNBOOK.md](docs/RUNBOOK.md)**. The phased rollout plan is in **[DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md)**.
 
@@ -80,7 +80,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) §10–11 for hosting, Supabase Auth URLs
 |------|---------|
 | `app/(auth)/` | Sign-in, sign-up |
 | `app/(patient)/` | Home, book flow, visits, profile |
-| `app/(doctor)/` | Agenda, schedule, blackout |
+| `app/(doctor)/` | Agenda (sessions and their bookings), schedule (create/cancel sessions), profile |
 | `app/(admin)/` | Roster, appointments, capacity, doctor schedule |
 | `lib/services/` | Supabase services (`auth`, `scheduling`, …) |
 | `lib/supabase.ts` | Supabase client |

@@ -11,10 +11,9 @@ import { invalidateScheduling, queryKeys } from "@/lib/query/keys";
 import {
   schedulingService,
   type AppointmentListFilter,
-  type ConfirmBookingInput,
-  type ConfirmDoctorAppointmentInput,
+  type BookSessionInput,
 } from "@/lib/services/scheduling";
-import type { Appointment, SlotHold } from "@/types/scheduling";
+import type { Appointment } from "@/types/scheduling";
 
 /** A patient's (account holder's) appointments. */
 export function usePatientAppointments(userId: string | undefined) {
@@ -64,6 +63,7 @@ export function useDoctorAgenda(
 
 export interface AdminAppointmentRow extends Appointment {
   startsAt: string;
+  endsAt: string;
   beneficiaryName: string;
   doctorName: string;
   proxyTag?: string;
@@ -87,7 +87,7 @@ export function useAdminAppointments(filter: AppointmentListFilter) {
         page.items,
       );
       const rows: AdminAppointmentRow[] = page.items.flatMap((appointment) => {
-        if (!appointment.startsAt) {
+        if (!appointment.startsAt || !appointment.endsAt) {
           return [];
         }
         const context = contextById.get(appointment.id);
@@ -95,6 +95,7 @@ export function useAdminAppointments(filter: AppointmentListFilter) {
           {
             ...appointment,
             startsAt: appointment.startsAt,
+            endsAt: appointment.endsAt,
             beneficiaryName: context?.beneficiaryName ?? "Patient",
             proxyTag: context?.proxyTag,
           },
@@ -111,28 +112,23 @@ export function useAdminAppointments(filter: AppointmentListFilter) {
 }
 
 // --------------------------------------------------------------- mutations
-// All appointment changes move slots and next-available times too, so they
-// invalidate the whole scheduling cache — on success *and* failure, since a
-// SLOT_TAKEN / HOLD_EXPIRED error also means what's on screen is out of date.
+// Every booking change moves session places and doctors' next open session
+// too, so they invalidate the whole scheduling cache — on success *and*
+// failure, since a "session full" error also means what's on screen is stale.
 
-export function useConfirmBooking() {
+export function useBookSession() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: ConfirmBookingInput) =>
-      schedulingService.confirmBooking(input),
+    mutationFn: (input: BookSessionInput) => schedulingService.bookSession(input),
     onSettled: () => invalidateScheduling(queryClient),
   });
 }
 
-export function useRescheduleAppointment() {
+export function useMoveBooking() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { appointmentId: string; newSlotId: string; hold: SlotHold }) =>
-      schedulingService.rescheduleAppointment(
-        input.appointmentId,
-        input.newSlotId,
-        input.hold,
-      ),
+    mutationFn: (input: { appointmentId: string; newSessionId: string }) =>
+      schedulingService.moveBooking(input.appointmentId, input.newSessionId),
     onSettled: () => invalidateScheduling(queryClient),
   });
 }
@@ -142,18 +138,6 @@ export function useCancelAppointment() {
   return useMutation({
     mutationFn: (appointmentId: string) =>
       schedulingService.cancelAppointment(appointmentId),
-    onSettled: () => invalidateScheduling(queryClient),
-  });
-}
-
-export function useConfirmDoctorAppointment() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (input: {
-      appointmentId: string;
-      details?: ConfirmDoctorAppointmentInput;
-    }) =>
-      schedulingService.confirmDoctorAppointment(input.appointmentId, input.details),
     onSettled: () => invalidateScheduling(queryClient),
   });
 }

@@ -5,11 +5,14 @@ export type NotificationEventType =
   | "visit_cancelled"
   | "visit_rescheduled"
   | "visit_rescheduled_doctor"
-  | "visit_completed";
+  | "visit_completed"
+  | "visit_booked";
 
 export interface AppointmentContext {
   appointmentDate: string;
   startTime: string;
+  /** Set for clinic-session bookings (first come, first served). */
+  sessionEndTime?: string | null;
   appointmentType: string;
   patientName: string;
   doctorName: string;
@@ -19,6 +22,9 @@ export interface AppointmentContext {
 }
 
 function formatWhen(ctx: AppointmentContext): string {
+  if (ctx.sessionEndTime) {
+    return `${ctx.appointmentDate}, ${ctx.startTime.slice(0, 5)}–${ctx.sessionEndTime.slice(0, 5)} clinic`;
+  }
   return `${ctx.appointmentDate} at ${ctx.startTime.slice(0, 5)}`;
 }
 
@@ -77,6 +83,11 @@ export function buildPushContent(
       return {
         title: "Visit complete",
         body: `Your visit with Dr. ${ctx.doctorName} on ${when} is marked complete.`,
+      };
+    case "visit_booked":
+      return {
+        title: "Visit booked",
+        body: `You're booked with Dr. ${ctx.doctorName}: ${when}. Patients are seen in order of arrival, so come early.`,
       };
     default:
       return { title: "FAME Hospital", body: "You have a scheduling update." };

@@ -1,31 +1,70 @@
-import { buildCapacityRow, tallySlots } from "@/lib/admin-capacity";
-import type { Doctor, Slot } from "@/types/scheduling";
+import { buildCapacityRows } from "@/lib/admin-capacity";
+import type { ClinicSession, Doctor } from "@/types/scheduling";
 
-const slot = (status: Slot["status"], i: number): Slot => ({
-  id: `s${i}`,
-  doctorId: "d1",
-  startsAt: `2026-11-24T0${i}:00:00Z`,
-  durationMin: 30,
-  status,
-});
-const doctor: Doctor = {
-  id: "d1",
-  name: "Dr. Ada",
+const doctor = (id: string, name: string): Doctor => ({
+  id,
+  name,
   department: "Outpatients",
   specialty: "GP",
-  nextAvailable: null,
+  nextSession: null,
   isAcceptingBookings: true,
-};
+});
 
-describe("admin capacity", () => {
-  it("tallies held/blocked slots as unavailable (blackout bucket)", () => {
-    const slots = [slot("booked", 1), slot("available", 2), slot("available", 3), slot("held", 4), slot("blackout", 5)];
-    expect(tallySlots(slots)).toEqual({ booked: 1, available: 2, blackout: 2, total: 5 });
+const session = (
+  id: string,
+  doctorId: string,
+  startsAt: string,
+  booked: number,
+  capacity: number,
+  status: ClinicSession["status"] = "scheduled",
+): ClinicSession => ({
+  id,
+  doctorId,
+  dateYmd: startsAt.slice(0, 10),
+  startsAt,
+  endsAt: startsAt.replace("T09", "T12").replace("T14", "T17"),
+  capacity,
+  bookedCount: booked,
+  placesLeft: Math.max(capacity - booked, 0),
+  status,
+  isBookable: status === "scheduled" && booked < capacity,
+});
+
+describe("buildCapacityRows", () => {
+  it("totals scheduled sessions per doctor and ignores cancelled ones in totals", () => {
+    const rows = buildCapacityRows(
+      [doctor("d1", "Dr. Ada")],
+      [
+        session("pm", "d1", "2026-11-24T14:00:00Z", 10, 10),
+        session("am", "d1", "2026-11-24T09:00:00Z", 5, 20),
+        session("x", "d1", "2026-11-24T09:00:00Z", 3, 20, "cancelled"),
+      ],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ booked: 15, capacity: 30, bookedPercent: 50 });
+    // Sessions in start order; the cancelled one is kept but flagged.
+    expect(rows[0].sessions.map((s) => [s.sessionId, s.bookedPercent, s.cancelled])).toEqual([
+      ["am", 25, false],
+      ["x", 15, true],
+      ["pm", 100, false],
+    ]);
   });
 
-  it("computes rounded percentages and handles an empty day", () => {
-    const row = buildCapacityRow(doctor, [slot("booked", 1), slot("available", 2), slot("available", 3)]);
-    expect(row).toMatchObject({ doctorName: "Dr. Ada", bookedPercent: 33, availablePercent: 67, blackoutPercent: 0 });
-    expect(buildCapacityRow(doctor, [])).toMatchObject({ total: 0, bookedPercent: 0, availablePercent: 0 });
+  it("lists doctors with sessions first, then doctors without, by name", () => {
+    const rows = buildCapacityRows(
+      [doctor("d1", "Dr. Zed"), doctor("d2", "Dr. Ada"), doctor("d3", "Dr. Bea")],
+      [session("s", "d1", "2026-11-24T09:00:00Z", 1, 10)],
+    );
+    expect(rows.map((row) => [row.doctorName, row.sessions.length])).toEqual([
+      ["Dr. Zed", 1],
+      ["Dr. Ada", 0],
+      ["Dr. Bea", 0],
+    ]);
+    expect(rows[1]).toMatchObject({ booked: 0, capacity: 0, bookedPercent: 0 });
+  });
+
+  it("keeps sessions of doctors missing from the directory (e.g. inactive)", () => {
+    const rows = buildCapacityRows([], [session("s", "gone", "2026-11-24T09:00:00Z", 2, 4)]);
+    expect(rows[0]).toMatchObject({ doctorId: "gone", doctorName: "Doctor", bookedPercent: 50 });
   });
 });

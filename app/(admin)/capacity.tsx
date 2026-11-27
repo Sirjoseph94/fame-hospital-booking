@@ -17,11 +17,11 @@ import {
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
-import { useSchedulingSettings } from "@/lib/queries/settings";
-import { useCapacity } from "@/lib/queries/slots";
+import { useCapacity } from "@/lib/queries/sessions";
 import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { SchedulingError } from "@/lib/services/scheduling";
+import { formatSessionTimes } from "@/lib/session-groups";
 
 function loadErrorMessage(cause: unknown): string {
   return cause instanceof SchedulingError
@@ -34,10 +34,9 @@ export default function AdminCapacityScreen() {
   const [userRefreshing, setUserRefreshing] = useState(false);
 
   const capacityQuery = useCapacity(todayYmd);
-  const settingsQuery = useSchedulingSettings();
-  useRefreshOnFocus([queryKeys.slots.capacityDay(todayYmd), queryKeys.settings]);
+  useRefreshOnFocus([queryKeys.sessions.day(todayYmd)]);
 
-  const queries = [capacityQuery, settingsQuery];
+  const queries = [capacityQuery];
   const isPending = queries.some((query) => query.isPending);
   // Nothing to show yet: a failed first load replaces the screen.
   const blockingError = queries.find((query) => query.isError && !query.data)?.error;
@@ -45,12 +44,11 @@ export default function AdminCapacityScreen() {
   const refreshError = queries.find((query) => query.isError && query.data)?.error;
 
   const rows = capacityQuery.data ?? [];
-  const bufferMinutes = settingsQuery.data?.bufferMinutes ?? 15;
 
   const refresh = async () => {
     setUserRefreshing(true);
     try {
-      await Promise.all([capacityQuery.refetch(), settingsQuery.refetch()]);
+      await capacityQuery.refetch();
     } finally {
       setUserRefreshing(false);
     }
@@ -100,20 +98,8 @@ export default function AdminCapacityScreen() {
               {format(new Date(), "EEEE, MMMM d, yyyy")}
             </Text>
             <Text className="text-sm text-ink-muted">
-              Slot mix includes post-visit buffers ({bufferMinutes} min) as
-              unavailable time.
+              Places booked in each clinic session against its patient limit.
             </Text>
-            <View className="flex-row flex-wrap gap-4 pt-1">
-              <Text className="text-xs text-ink-muted">
-                <Text className="font-semibold text-primary">Booked</Text>
-              </Text>
-              <Text className="text-xs text-ink-muted">
-                <Text className="font-semibold text-available">Available</Text>
-              </Text>
-              <Text className="text-xs text-ink-muted">
-                <Text className="font-semibold text-ink-muted">Blackout / held</Text>
-              </Text>
-            </View>
           </Card>
 
           {rows.length === 0 ? (
@@ -121,19 +107,37 @@ export default function AdminCapacityScreen() {
           ) : (
             rows.map((row) => (
               <Card key={row.doctorId} style={{ gap: 10 }}>
-                <Text className="text-base font-semibold text-ink" selectable>
-                  {row.doctorName}
-                </Text>
-                <CapacityBar
-                  availablePercent={row.availablePercent}
-                  blackoutPercent={row.blackoutPercent}
-                  bookedPercent={row.bookedPercent}
-                  label={`${row.booked} booked · ${row.available} available · ${row.blackout} blackout/held (${row.total} slots today)`}
-                />
-                <Text className="text-sm text-ink-muted">
-                  {row.bookedPercent}% booked · {row.availablePercent}% available ·{" "}
-                  {row.blackoutPercent}% unavailable
-                </Text>
+                <View className="flex-row items-center justify-between gap-3">
+                  <Text className="min-w-0 flex-1 text-base font-semibold text-ink" selectable>
+                    {row.doctorName}
+                  </Text>
+                  {row.capacity > 0 ? (
+                    <Text className="text-sm font-semibold text-ink-muted">
+                      {row.booked} / {row.capacity} · {row.bookedPercent}%
+                    </Text>
+                  ) : null}
+                </View>
+                {row.sessions.length === 0 ? (
+                  <Text className="text-sm text-ink-muted">No session today.</Text>
+                ) : (
+                  row.sessions.map((session) => (
+                    <View key={session.sessionId} className="gap-1">
+                      <Text className="text-sm font-medium text-ink">
+                        {formatSessionTimes(session)}
+                        {session.cancelled ? " · cancelled" : ""}
+                      </Text>
+                      <CapacityBar
+                        bookedPercent={session.bookedPercent}
+                        label={
+                          session.cancelled
+                            ? "Session cancelled"
+                            : `${session.booked} of ${session.capacity} places booked`
+                        }
+                        muted={session.cancelled}
+                      />
+                    </View>
+                  ))
+                )}
               </Card>
             ))
           )}

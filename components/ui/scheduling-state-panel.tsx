@@ -49,14 +49,14 @@ export function SchedulingStatePanel({
         {showRepick && onRepick ? (
           <Pressable
             accessibilityLabel={
-              code ? schedulingErrorRepickLabel(code) : "Pick another time"
+              code ? schedulingErrorRepickLabel(code) : "Choose another session"
             }
             accessibilityRole="button"
             className="min-h-12 flex-1 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
             onPress={onRepick}
           >
             <Text className="font-semibold text-primary">
-              {code ? schedulingErrorRepickLabel(code) : "Pick another time"}
+              {code ? schedulingErrorRepickLabel(code) : "Choose another session"}
             </Text>
           </Pressable>
         ) : null}

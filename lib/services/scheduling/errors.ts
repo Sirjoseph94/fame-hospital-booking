@@ -1,6 +1,6 @@
 export type SchedulingErrorCode =
-  | "SLOT_TAKEN"
-  | "HOLD_EXPIRED"
+  /** The session filled up, ended or was cancelled before the booking landed. */
+  | "SESSION_UNAVAILABLE"
   | "NETWORK_ERROR"
   /** Caller is not allowed to perform the action (retrying won't help). */
   | "FORBIDDEN"

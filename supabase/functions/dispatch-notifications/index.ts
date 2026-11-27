@@ -76,7 +76,7 @@ async function loadAppointmentContext(
   const { data: appt, error } = await supabase
     .from("appointments")
     .select(
-      "appointment_date, start_time, appointment_type, room, video_url, address, patient_id, doctor_id",
+      "appointment_date, start_time, appointment_type, room, video_url, address, patient_id, doctor_id, session:clinic_sessions(end_time)",
     )
     .eq("id", appointmentId)
     .maybeSingle();
@@ -98,9 +98,12 @@ async function loadAppointmentContext(
     ]),
   );
 
+  const session = Array.isArray(appt.session) ? appt.session[0] : appt.session;
+
   return {
     appointmentDate: appt.appointment_date as string,
     startTime: appt.start_time as string,
+    sessionEndTime: (session?.end_time as string | undefined) ?? null,
     appointmentType: appt.appointment_type as string,
     patientName: byId.get(appt.patient_id) ?? "Patient",
     doctorName: byId.get(appt.doctor_id) ?? "Doctor",

@@ -31,11 +31,11 @@ export const termsOfService: LegalDocument = {
       blocks: [
         {
           list: [
-            "Appointments depend on availability. While you complete a booking, a time slot is held for you for a short time and is released if you don't finish.",
-            "Some appointments must be confirmed by the doctor or hospital before they are final; the app shows each appointment's status.",
+            "You book a place in a doctor's clinic session. Each session has a limited number of places, and patients are seen in order of arrival during the session, not at a fixed time.",
+            "Your place is confirmed as soon as you book; the app shows each booking's status.",
             "The hospital may need to reschedule or cancel an appointment, for example if a doctor becomes unavailable. We will tell you as soon as we can and help you rebook.",
-            "If you can't attend, please cancel or reschedule in the app as early as possible so someone else can use the slot.",
-            "Telehealth visits need a working internet connection and a suitable device. Home visits need an accurate address and safe access for our staff.",
+            "If you can't attend, please cancel or change session in the app as early as possible so someone else can have your place.",
+            "Arrive during the session and check in at reception. Waiting times depend on how many patients arrive before you.",
           ],
         },
       ],

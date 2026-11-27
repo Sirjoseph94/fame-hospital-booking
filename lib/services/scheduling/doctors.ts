@@ -14,26 +14,28 @@ import {
   type DoctorRow,
   mapDoctor,
   mapDoctorDetail,
+  mapNextOpenSession,
   mapRosterDoctor,
-  type SlotRow,
-  slotStartsAt,
+  type NextOpenSessionRow,
 } from "./mappers";
+import type { NextOpenSession } from "@/types/scheduling";
 import type { SchedulingService } from "./types";
 
-/** Earliest open slot start (ISO) per doctor, from the one-row-per-doctor view. */
-async function fetchNextAvailableByDoctor(): Promise<Map<string, string>> {
+/** Earliest bookable session per doctor, from the one-row-per-doctor view. */
+async function fetchNextSessionByDoctor(): Promise<Map<string, NextOpenSession>> {
   const { data, error } = await supabase
-    .from("doctor_next_available_slots")
-    .select("doctor_id, slot_date, start_time");
+    .from("doctor_next_open_session")
+    .select("doctor_id, session_id, session_date, start_time, end_time, places_left");
 
   if (error) {
     asNetworkError(error);
   }
 
   return new Map(
-    ((data ?? []) as Pick<SlotRow, "doctor_id" | "slot_date" | "start_time">[]).map(
-      (row) => [row.doctor_id, slotStartsAt(row)],
-    ),
+    ((data ?? []) as NextOpenSessionRow[]).map((row) => [
+      row.doctor_id,
+      mapNextOpenSession(row),
+    ]),
   );
 }
 
@@ -58,7 +60,7 @@ export const doctorsMethods: Pick<
       }
 
       const doctors = (data ?? []) as DoctorRow[];
-      const nextByDoctor = await fetchNextAvailableByDoctor();
+      const nextByDoctor = await fetchNextSessionByDoctor();
 
       return doctors.map((row) =>
         mapDoctor(row, nextByDoctor.get(row.id) ?? null),
@@ -121,7 +123,7 @@ export const doctorsMethods: Pick<
       }
 
       const doctors = (data ?? []) as DoctorRow[];
-      const nextByDoctor = await fetchNextAvailableByDoctor();
+      const nextByDoctor = await fetchNextSessionByDoctor();
 
       return doctors.map((row) =>
         mapRosterDoctor(row, nextByDoctor.get(row.id) ?? null),

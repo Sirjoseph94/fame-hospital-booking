@@ -29,9 +29,16 @@ export interface Doctor {
   name: string;
   department: string;
   specialty: string;
-  /** Start of the next open slot (ISO), or null when none is open. */
-  nextAvailable: string | null;
+  /** The earliest session with places left, or null when none is open. */
+  nextSession: NextOpenSession | null;
   isAcceptingBookings: boolean;
+}
+
+export interface NextOpenSession {
+  sessionId: string;
+  startsAt: string;
+  endsAt: string;
+  placesLeft: number;
 }
 
 /**
@@ -55,18 +62,26 @@ export interface RosterDoctor extends Doctor {
   accountActive: boolean;
 }
 
-export type SlotStatus =
-  | "available"
-  | "held"
-  | "booked"
-  | "blackout";
+export type ClinicSessionStatus = "scheduled" | "cancelled";
 
-export interface Slot {
+/**
+ * A clinic session: the doctor sees up to `capacity` patients between
+ * `startsAt` and `endsAt`, first come, first served.
+ */
+export interface ClinicSession {
   id: string;
   doctorId: string;
+  /** Local "yyyy-MM-dd". */
+  dateYmd: string;
   startsAt: string;
-  durationMin: number;
-  status: SlotStatus;
+  endsAt: string;
+  capacity: number;
+  bookedCount: number;
+  placesLeft: number;
+  status: ClinicSessionStatus;
+  cancelReason?: string;
+  /** Scheduled, not yet ended and not full. */
+  isBookable: boolean;
 }
 
 export type AppointmentType = "in-clinic" | "telehealth" | "home-visit";
@@ -83,7 +98,8 @@ export interface Appointment {
   accountHolderId: string;
   beneficiaryId: string;
   doctorId: string;
-  slotId: string;
+  /** Clinic session; absent on bookings made before sessions existed. */
+  sessionId?: string;
   type: AppointmentType;
   status: AppointmentStatus;
   dbStatus: AppointmentDbStatus;
@@ -94,18 +110,4 @@ export interface Appointment {
   address?: string;
   reason?: string;
   notes?: string;
-}
-
-export interface SlotHold {
-  slotId: string;
-  expiresAt: string;
-}
-
-export interface BlackoutRule {
-  id: string;
-  doctorId: string;
-  startsAt: string;
-  endsAt: string;
-  reason: string;
-  setBy: "doctor" | "admin";
 }
