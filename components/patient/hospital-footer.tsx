@@ -1,5 +1,6 @@
 import { Linking, Pressable, Text, View } from "react-native";
 
+import { LegalLinks } from "@/components/legal/legal-links";
 import { Card } from "@/components/ui/card";
 import { hospitalInfo } from "@/lib/hospital-info";
 
@@ -32,6 +33,9 @@ export function HospitalFooter() {
             {hospitalInfo.email}
           </Text>
         </Pressable>
+      </View>
+      <View className="-mx-2 items-start">
+        <LegalLinks />
       </View>
     </Card>
   );

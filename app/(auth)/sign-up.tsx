@@ -11,6 +11,7 @@ import { Controller, useForm } from "react-hook-form";
 import { Link, router } from "expo-router";
 import { z } from "zod";
 
+import { LegalLinks } from "@/components/legal/legal-links";
 import { Card } from "@/components/ui/card";
 import { DatePickerField } from "@/components/ui/date-picker-field";
 import { FormTextField } from "@/components/ui/form-text-field";
@@ -160,6 +161,18 @@ export default function SignUpScreen() {
             </Text>
           ) : null}
 
+          <Text className="text-sm leading-5 text-ink-muted">
+            By creating an account, you agree to our{" "}
+            <Link className="font-semibold text-primary" href="/terms">
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link className="font-semibold text-primary" href="/privacy">
+              Privacy Policy
+            </Link>
+            .
+          </Text>
+
           <Pressable
             accessibilityLabel="Create patient account"
             accessibilityRole="button"
@@ -185,6 +198,8 @@ export default function SignUpScreen() {
             </Text>
           </Pressable>
         </Link>
+
+        <LegalLinks />
       </View>
     </ScrollView>
   );

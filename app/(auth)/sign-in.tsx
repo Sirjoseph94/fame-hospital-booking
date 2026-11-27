@@ -11,6 +11,7 @@ import { Controller, useForm } from "react-hook-form";
 import { Link, router } from "expo-router";
 import { z } from "zod";
 
+import { LegalLinks } from "@/components/legal/legal-links";
 import { Card } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { FormTextField } from "@/components/ui/form-text-field";
@@ -139,6 +140,8 @@ export default function SignInScreen() {
             </Text>
           </Pressable>
         </Link>
+
+        <LegalLinks />
       </View>
     </ScrollView>
   );
