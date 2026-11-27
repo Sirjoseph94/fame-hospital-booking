@@ -167,6 +167,7 @@ export default function PatientHomeScreen() {
       beneficiaryName: beneficiary?.displayName ?? "Patient",
       doctorName: doctorNameById(doctors, next.doctorId) ?? "Doctor",
       startsAt: next.startsAt,
+      endsAt: next.endsAt,
       type: next.type,
       dbStatus: next.dbStatus,
       videoUrl: next.videoUrl,
@@ -442,9 +443,13 @@ export default function PatientHomeScreen() {
                   status="upcoming"
                   telehealthJoinLabel={
                     upcomingVisit.type === "telehealth" &&
-                    upcomingVisit.dbStatus === "confirmed"
+                    upcomingVisit.dbStatus === "confirmed" &&
+                    upcomingVisit.videoUrl
                       ? (() => {
-                          const join = telehealthJoinState(upcomingVisit.startsAt);
+                          const join = telehealthJoinState(
+                            upcomingVisit.startsAt,
+                            upcomingVisit.endsAt,
+                          );
                           return join.showJoin ? join.label : undefined;
                         })()
                       : undefined

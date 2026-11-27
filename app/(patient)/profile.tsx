@@ -8,7 +8,7 @@ import {
   View,
 } from "react-native";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { router } from "expo-router";
+import { Link, router } from "expo-router";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { NotificationPreferencesCard } from "@/components/notifications/notification-preferences-card";
@@ -247,9 +247,9 @@ export default function PatientProfileScreen() {
               Clinician invite code
             </Text>
             <Text className="text-sm text-ink-muted">
-              Hospital staff: enter the code from your administrator after you
-              create an account. The invite email is informational only—we do
-              not verify it matches this account.
+              Hospital staff: enter the code from your administrator. You must
+              be signed in with the same email address the invite was created
+              for.
             </Text>
             <View className="gap-1">
               <Text className="text-sm font-medium text-ink">Invite code</Text>
@@ -388,6 +388,25 @@ export default function PatientProfileScreen() {
               <Text className="font-semibold text-surface">Save profile</Text>
             )}
           </Pressable>
+
+          <Card style={{ gap: 8 }}>
+            <Text className="text-base font-semibold text-ink">Delete account</Text>
+            <Text className="text-sm text-ink-muted">
+              Permanently delete your account, health details, family members and
+              appointment history. Upcoming visits are cancelled.
+            </Text>
+            <Link href="/delete-account" asChild>
+              <Pressable
+                accessibilityLabel="Delete account"
+                accessibilityRole="link"
+                className="min-h-12 justify-center self-start web:hover:opacity-80"
+              >
+                <Text className="text-base font-semibold text-danger">
+                  Delete account…
+                </Text>
+              </Pressable>
+            </Link>
+          </Card>
         </ScrollView>
       )}
     </View>

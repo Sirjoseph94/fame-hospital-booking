@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AccessibilityInfo, Pressable, ScrollView, Text, View } from "react-native";
 import { Stack, router } from "expo-router";
+import { format, parseISO } from "date-fns";
 
 import { AppointmentTypeToggle } from "@/components/ui/appointment-type-toggle";
 import { Card } from "@/components/ui/card";
@@ -70,7 +71,9 @@ export default function BookIntakeScreen() {
           <Text className="text-base font-semibold text-ink">Review</Text>
           <Text className="text-sm text-ink-muted">{doctorName}</Text>
           <Text className="text-sm text-ink" selectable>
-            {slotStartsAt ?? "Time selected"}
+            {slotStartsAt
+              ? format(parseISO(slotStartsAt), "EEE, MMM d · h:mm a")
+              : "Time selected"}
           </Text>
         </Card>
 

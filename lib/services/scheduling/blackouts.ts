@@ -75,17 +75,34 @@ export const blackoutsMethods: Pick<
         return slotStart < endsAt && slotEnd > startsAt;
       });
 
-      if (overlapping.length > 0) {
-        await supabase
+      // Never touch booked slots: that would hide a live visit behind a
+      // "Blocked" slot (which could then be deleted, orphaning the visit).
+      // Held slots are safe to block — booking requires status 'held', so the
+      // patient's checkout fails cleanly, and hold release only resets 'held'.
+      const toBlock = overlapping.filter(
+        (slot) => slot.status === "available" || slot.status === "held",
+      );
+      const bookedVisitsInWindow = overlapping.filter(
+        (slot) => slot.status === "booked",
+      ).length;
+
+      if (toBlock.length > 0) {
+        const { error: blockError } = await supabase
           .from("appointment_slots")
           .update({ status: "blackout" })
           .in(
             "id",
-            overlapping.map((slot) => slot.id),
+            toBlock.map((slot) => slot.id),
           );
+        if (blockError) {
+          asNetworkError(blockError);
+        }
       }
 
-      return mapBlackout(blackoutRow as BlackoutRow);
+      return {
+        rule: mapBlackout(blackoutRow as BlackoutRow),
+        bookedVisitsInWindow,
+      };
     } catch (error) {
       if (error instanceof SchedulingError) {
         throw error;
@@ -204,13 +221,54 @@ export const blackoutsMethods: Pick<
       });
 
       if (toRelease.length > 0) {
-        await supabase
-          .from("appointment_slots")
-          .update({ status: "available" })
+        // Older versions blacked out booked slots too. Put those back to
+        // 'booked' instead of opening them up for a second booking.
+        const { data: activeRows, error: activeError } = await supabase
+          .from("appointments")
+          .select("slot_id")
           .in(
-            "id",
+            "slot_id",
             toRelease.map((slot) => slot.id),
-          );
+          )
+          .in("status", ["pending", "confirmed"]);
+
+        if (activeError) {
+          asNetworkError(activeError);
+        }
+
+        const inUse = new Set(
+          ((activeRows ?? []) as { slot_id: string | null }[]).map(
+            (row) => row.slot_id,
+          ),
+        );
+        const reopen = toRelease.filter((slot) => !inUse.has(slot.id));
+        const rebook = toRelease.filter((slot) => inUse.has(slot.id));
+
+        const updates = [
+          reopen.length > 0
+            ? supabase
+                .from("appointment_slots")
+                .update({ status: "available" })
+                .in(
+                  "id",
+                  reopen.map((slot) => slot.id),
+                )
+            : null,
+          rebook.length > 0
+            ? supabase
+                .from("appointment_slots")
+                .update({ status: "booked" })
+                .in(
+                  "id",
+                  rebook.map((slot) => slot.id),
+                )
+            : null,
+        ];
+        for (const result of await Promise.all(updates)) {
+          if (result?.error) {
+            asNetworkError(result.error);
+          }
+        }
       }
     } catch (error) {
       if (error instanceof SchedulingError) {

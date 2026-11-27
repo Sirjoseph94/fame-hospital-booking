@@ -51,7 +51,7 @@ export function VisitCard({
   onJoinTelehealth,
 }: VisitCardProps) {
   const when = format(parseISO(startsAt), "EEE, MMM d · h:mm a");
-  const badge = visitStatusLabel(status, dbStatus, "patient");
+  const badge = visitStatusLabel(status, dbStatus, "patient", startsAt);
   const summary = `${badge} visit for ${beneficiaryName} with ${doctorName}`;
   const showTelehealthJoin =
     telehealthJoinLabel &&

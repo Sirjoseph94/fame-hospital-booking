@@ -61,6 +61,7 @@ The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). 
 | 12 | [`20260922000100_beneficiary_integrity.sql`](../supabase/migrations/20260922000100_beneficiary_integrity.sql) | One `self` beneficiary per account (unique index); aborts with merge instructions if duplicates exist |
 | 13 | [`20260922000200_doctor_next_available_view.sql`](../supabase/migrations/20260922000200_doctor_next_available_view.sql) | `doctor_next_available_slots` view (one row per doctor, RLS-respecting) + slot index |
 | 14 | [`20260922000300_notification_retry.sql`](../supabase/migrations/20260922000300_notification_retry.sql) | `claimed_at` on `notification_deliveries` for retries / stuck-row recovery (see §12 sweep) |
+| 15 | [`20261127000000_account_deletion.sql`](../supabase/migrations/20261127000000_account_deletion.sql) | `delete_my_account()` RPC: patient self-service deletion (App Store / Google Play). Cancels upcoming visits, releases holds, deletes the auth user (data cascades). **Redeploy `dispatch-notifications`** (§12) with it so doctors' "visit cancelled" messages keep the visit details |
 
 ### 2a. Existing databases (set up through the SQL Editor)
 
@@ -412,6 +413,7 @@ Server secrets (`NOTIFICATION_WEBHOOK_SECRET`, Resend, Twilio) are **Supabase Ed
 4. **Store submission** (before using `submit-production.yml`):
    - iOS: create the app in App Store Connect (bundle ID `org.famehmrc.booking`), then add an App Store Connect API key: `npx eas-cli credentials -p ios` → App Store Connect API Key.
    - Android: create the app in Google Play Console. **Upload the first AAB manually** (Google requires it). Then add a Google service account key: `npx eas-cli credentials -p android` → Google Service Account.
+   - **Account deletion** (both stores require it): in-app it is Profile → Delete account. For Play Console → App content → Data safety → "Delete account URL", and App Store Connect review notes, use `https://<your-web-domain>/delete-account` (public page with the steps). Doctor/admin accounts are closed by an admin, not self-service.
 5. **Protect `main` on GitHub** so merges require the CI checks (`check`, `migrations`, `edge-functions`). `deploy-production.yml` deploys whatever lands on `main`.
 
 ### Database and Edge Functions are not deployed by CI

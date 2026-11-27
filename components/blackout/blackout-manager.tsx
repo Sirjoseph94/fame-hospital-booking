@@ -55,6 +55,7 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
   const [userRefreshing, setUserRefreshing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [warningMessage, setWarningMessage] = useState<string | null>(null);
 
   const blackoutsQuery = useBlackouts(doctorId);
   const setBlackout = useSetBlackout();
@@ -86,9 +87,10 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
 
     setFormError(null);
     setSuccessMessage(null);
+    setWarningMessage(null);
 
     try {
-      await setBlackout.mutateAsync({
+      const { bookedVisitsInWindow } = await setBlackout.mutateAsync({
         doctorId,
         startsAt: toIsoDateTimeFromForm(values.slotDate, values.startTime),
         endsAt: toIsoDateTimeFromForm(values.slotDate, values.endTime),
@@ -97,6 +99,13 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
       });
       reset({ slotDate: values.slotDate, ...DEFAULT_WINDOW, reason: "" });
       setSuccessMessage(copy.savedMessage);
+      if (bookedVisitsInWindow > 0) {
+        setWarningMessage(
+          bookedVisitsInWindow === 1
+            ? "1 booked visit falls inside this blackout and is still scheduled. Cancel or reschedule it from the agenda."
+            : `${bookedVisitsInWindow} booked visits fall inside this blackout and are still scheduled. Cancel or reschedule them from the agenda.`,
+        );
+      }
     } catch (cause) {
       setFormError(
         cause instanceof SchedulingError
@@ -151,6 +160,7 @@ export function BlackoutManager({ doctorId, setBy, copy }: BlackoutManagerProps)
         submitLabel={copy.submitLabel}
         submitting={submitting}
         successMessage={successMessage}
+        warningMessage={warningMessage}
         onSubmit={() => void handleSubmit(submit)()}
       />
 

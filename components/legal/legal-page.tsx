@@ -13,7 +13,8 @@ interface LegalPageProps {
   path: keyof typeof otherDocument;
 }
 
-function goBack() {
+/** Back if there is history (in-app navigation), else home (deep link / reload). */
+export function goBack() {
   if (router.canGoBack()) {
     router.back();
   } else {

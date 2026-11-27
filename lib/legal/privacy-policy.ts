@@ -92,7 +92,7 @@ export const privacyPolicy: LegalDocument = {
     {
       heading: "How long we keep it",
       blocks: [
-        "We keep your information while your account is active. After an account is closed, we keep appointment records only as long as medical record-keeping rules and other legal obligations require, then delete or anonymize them.",
+        "We keep your information while your account is active. When you delete your account, your profile, health details, family members, appointment history and notification records are deleted from the app straight away; upcoming visits are cancelled first and the doctor is told. Medical records the hospital keeps in its own systems are not part of the app and are kept as medical record-keeping rules require.",
       ],
     },
     {
@@ -102,10 +102,10 @@ export const privacyPolicy: LegalDocument = {
           list: [
             "View and update your profile and family members at any time in the app.",
             "Choose which notifications you receive in the app, and turn off push notifications in your device settings.",
-            `Ask for a copy of your information, a correction, or deletion of your account by contacting us at ${hospitalInfo.email}.`,
+            "Delete your account at any time: in the app, open Profile and tap Delete account, or visit the Delete account page on our website (/delete-account).",
+            `Ask for a copy of your information or a correction by contacting us at ${hospitalInfo.email}.`,
           ],
         },
-        "Some records may have to be kept by law even after you ask us to delete them; if so, we will tell you.",
       ],
     },
     {

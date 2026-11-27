@@ -64,7 +64,7 @@ export const termsOfService: LegalDocument = {
     {
       heading: "Suspension and closing your account",
       blocks: [
-        `We may suspend or deactivate an account that breaks these terms or puts patients, staff or the service at risk. You can stop using the app at any time and ask us to close your account by emailing ${hospitalInfo.email}.`,
+        `We may suspend or deactivate an account that breaks these terms or puts patients, staff or the service at risk. You can stop using the app at any time and delete your account from the Profile tab (Delete account). Doctor and administrator accounts are closed by the hospital; email ${hospitalInfo.email}.`,
       ],
     },
     {

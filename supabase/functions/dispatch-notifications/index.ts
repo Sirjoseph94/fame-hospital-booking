@@ -26,6 +26,11 @@ interface DeliveryRow {
   event_type: string;
   channel: "email" | "sms" | "push";
   status: string;
+  /**
+   * Visit details captured when the appointment row is about to be deleted
+   * (account deletion, see delete_my_account). Empty object otherwise.
+   */
+  payload?: Partial<AppointmentContext> | null;
 }
 
 interface WebhookPayload {
@@ -300,9 +305,14 @@ async function processDelivery(
     doctorName: "Doctor",
   };
 
-  if (row.appointment_id) {
-    const loaded = await loadAppointmentContext(supabase, row.appointment_id);
-    if (loaded) ctx = loaded;
+  const loaded = row.appointment_id
+    ? await loadAppointmentContext(supabase, row.appointment_id)
+    : null;
+  if (loaded) {
+    ctx = loaded;
+  } else if (row.payload?.appointmentDate && row.payload.startTime) {
+    // The appointment no longer exists (patient deleted their account).
+    ctx = { ...ctx, ...row.payload } as AppointmentContext;
   }
 
   const eventType = row.event_type as NotificationEventType;

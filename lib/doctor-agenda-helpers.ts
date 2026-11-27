@@ -1,7 +1,5 @@
 import { addMinutes, format, isSameDay, isValid, parseISO } from "date-fns";
 
-import { todayYmdLocal } from "@/lib/scheduling-dates";
-
 import type {
   Appointment,
   BeneficiaryRelationship,
@@ -42,10 +40,13 @@ export function filterVisitsForDay(
   return visits.filter((visit) => isSameDay(parseISO(visit.startsAt), day));
 }
 
-/** Confirmed visits on today or an earlier calendar day can be marked complete. */
-export function canDoctorMarkVisitComplete(startsAt: string): boolean {
-  const visitYmd = format(parseISO(startsAt), "yyyy-MM-dd");
-  return visitYmd <= todayYmdLocal();
+/** A confirmed visit can be marked complete once its start time has passed. */
+export function canDoctorMarkVisitComplete(
+  startsAt: string,
+  now: Date = new Date(),
+): boolean {
+  const start = parseISO(startsAt);
+  return isValid(start) && start.getTime() <= now.getTime();
 }
 
 export function buildDoctorAgendaTimeline(

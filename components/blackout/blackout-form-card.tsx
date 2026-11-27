@@ -14,6 +14,7 @@ interface BlackoutFormCardProps {
   submitting: boolean;
   formError: string | null;
   successMessage: string | null;
+  warningMessage?: string | null;
   submitLabel?: string;
   intro?: string;
 }
@@ -24,6 +25,7 @@ export function BlackoutFormCard({
   submitting,
   formError,
   successMessage,
+  warningMessage,
   submitLabel = "Save blackout",
   intro = "Block a single period when appointments cannot be booked.",
 }: BlackoutFormCardProps) {
@@ -105,6 +107,12 @@ export function BlackoutFormCard({
       {successMessage ? (
         <Text accessibilityLiveRegion="polite" className="text-sm text-available">
           {successMessage}
+        </Text>
+      ) : null}
+
+      {warningMessage ? (
+        <Text accessibilityLiveRegion="polite" className="text-sm font-medium text-warning">
+          {warningMessage}
         </Text>
       ) : null}
 
