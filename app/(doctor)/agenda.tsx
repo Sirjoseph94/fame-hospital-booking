@@ -266,7 +266,7 @@ export default function DoctorAgendaScreen() {
   const renderVisitCard = (visit: DoctorAgendaVisit) => {
     const join =
       visit.type === "telehealth" && visit.status === "upcoming"
-        ? telehealthJoinState(visit.startsAt)
+        ? telehealthJoinState(visit.startsAt, visit.endsAt)
         : { showJoin: false, label: "" };
 
     const canManage = visit.status === "upcoming";

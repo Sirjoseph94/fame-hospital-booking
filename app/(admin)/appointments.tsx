@@ -139,7 +139,7 @@ export default function AdminAppointmentsScreen() {
               const join =
                 appointment.type === "telehealth" &&
                 appointment.status === "upcoming"
-                  ? telehealthJoinState(appointment.startsAt)
+                  ? telehealthJoinState(appointment.startsAt, appointment.endsAt)
                   : { showJoin: false, label: "" };
               return (
                 <Card key={appointment.id} style={{ gap: 8 }}>
@@ -154,7 +154,12 @@ export default function AdminAppointmentsScreen() {
                     </View>
                     <View className="rounded-full bg-surface-muted px-3 py-1">
                       <Text className="text-xs font-semibold uppercase text-ink-muted">
-                        {visitStatusLabel(appointment.status, appointment.dbStatus, "admin")}
+                        {visitStatusLabel(
+                          appointment.status,
+                          appointment.dbStatus,
+                          "admin",
+                          appointment.startsAt,
+                        )}
                       </Text>
                     </View>
                   </View>

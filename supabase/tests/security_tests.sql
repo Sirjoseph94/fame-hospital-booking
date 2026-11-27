@@ -340,4 +340,69 @@ set role authenticated;
 select t.ok((select count(*) from public.beneficiaries) = 1, 'reactivated user regains access');
 reset role;
 
+-- ---------------------------------------------------------------- account deletion
+-- R: a patient with a family member, an upcoming visit with D, a past visit,
+-- a live hold and notification preferences.
+select set_config('request.jwt.claims', '', false);
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-0000000000a3', 'r@x.test', '{"full_name":"Remy"}');
+insert into public.beneficiaries (id, account_holder_id, display_name, relationship, dob, gender) values
+  ('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000a3', 'Remy', 'self', '1985-01-01', 'female'),
+  ('00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000a3', 'Remy Jr', 'child', '2016-01-01', 'male');
+insert into public.appointment_slots (id, doctor_id, slot_date, start_time, end_time, status) values
+  ('00000000-0000-0000-0000-00000000c010', '00000000-0000-0000-0000-0000000000d1', current_date + 5, '09:00', '09:30', 'booked'),
+  ('00000000-0000-0000-0000-00000000c011', '00000000-0000-0000-0000-0000000000d1', current_date + 5, '09:30', '10:00', 'held'),
+  ('00000000-0000-0000-0000-00000000c012', '00000000-0000-0000-0000-0000000000d1', current_date - 5, '09:00', '09:30', 'booked');
+insert into public.slot_holds (slot_id, held_by, expires_at) values
+  ('00000000-0000-0000-0000-00000000c011', '00000000-0000-0000-0000-0000000000a3', now() + interval '5 minutes');
+insert into public.appointments (id, patient_id, account_holder_id, beneficiary_id, doctor_id, slot_id, appointment_date, start_time, status) values
+  ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000a3',
+   '00000000-0000-0000-0000-0000000000b4', '00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-00000000c010',
+   current_date + 5, '09:00', 'confirmed'),
+  ('00000000-0000-0000-0000-0000000000f2', '00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000a3',
+   '00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-00000000c012',
+   current_date - 5, '09:00', 'completed');
+insert into public.notification_preferences (user_id, email_opt_in) values
+  ('00000000-0000-0000-0000-0000000000a3', true);
+
+set role anon;
+do $$ begin
+  begin
+    perform public.delete_my_account();
+    raise exception 'FAIL: anon called delete_my_account';
+  exception when insufficient_privilege then raise notice 'PASS: anon cannot call delete_my_account'; end;
+end $$;
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.delete_my_account()->>'code' = 'STAFF_ACCOUNT', 'doctor cannot self-delete (would cascade to other patients'' visits)');
+reset role;
+select t.ok((select count(*) from public.doctors where id = '00000000-0000-0000-0000-0000000000d1') = 1, 'doctor row untouched');
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a3","email":"r@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.delete_my_account()->>'cancelled_visits')::int = 1, 'patient deletes own account; one upcoming visit cancelled');
+reset role;
+select set_config('request.jwt.claims', '', false);
+
+select t.ok(not exists (select 1 from auth.users where id = '00000000-0000-0000-0000-0000000000a3'), 'auth user deleted');
+select t.ok(not exists (select 1 from public.profiles where id = '00000000-0000-0000-0000-0000000000a3'), 'profile deleted');
+select t.ok(not exists (select 1 from public.beneficiaries where account_holder_id = '00000000-0000-0000-0000-0000000000a3'), 'family members deleted');
+select t.ok(not exists (select 1 from public.appointments where id in ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-0000000000f2')),
+  'upcoming and past appointments deleted');
+select t.ok(not exists (select 1 from public.notification_preferences where user_id = '00000000-0000-0000-0000-0000000000a3'), 'notification preferences deleted');
+select t.ok(not exists (select 1 from public.notification_deliveries where recipient_id = '00000000-0000-0000-0000-0000000000a3'),
+  'deleted patient''s own notifications removed');
+select t.ok((select status from public.appointment_slots where id = '00000000-0000-0000-0000-00000000c010') = 'available', 'upcoming visit slot reopened');
+select t.ok((select status from public.appointment_slots where id = '00000000-0000-0000-0000-00000000c011') = 'available', 'held slot released');
+select t.ok(not exists (select 1 from public.slot_holds where held_by = '00000000-0000-0000-0000-0000000000a3'), 'holds removed');
+select t.ok((select count(*) from public.notification_deliveries
+             where recipient_id = '00000000-0000-0000-0000-0000000000d1'
+               and event_type = 'visit_cancelled'
+               and appointment_id is null
+               and payload->>'startTime' like '09:00%'
+               and payload->>'patientName' = 'Remy') = 3,
+  'doctor still gets "visit cancelled" (3 channels) with visit details in payload');
+
 \echo ALL TESTS PASSED

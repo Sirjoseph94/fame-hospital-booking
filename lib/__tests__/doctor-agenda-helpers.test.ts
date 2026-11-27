@@ -58,11 +58,13 @@ describe("doctor agenda helpers", () => {
     expect(timeline).toHaveLength(1);
   });
 
-  it("allows completing visits from today or earlier only", () => {
-    jest.useFakeTimers().setSystemTime(new Date("2026-11-24T10:00:00Z"));
-    expect(canDoctorMarkVisitComplete("2026-11-24T15:00:00Z")).toBe(true);
-    expect(canDoctorMarkVisitComplete("2026-11-23T15:00:00Z")).toBe(true);
-    expect(canDoctorMarkVisitComplete("2026-11-25T09:00:00Z")).toBe(false);
-    jest.useRealTimers();
+  it("allows completing a visit only once it has started", () => {
+    const now = new Date("2026-11-24T10:00:00Z");
+    expect(canDoctorMarkVisitComplete("2026-11-24T10:00:00Z", now)).toBe(true);
+    expect(canDoctorMarkVisitComplete("2026-11-24T09:30:00Z", now)).toBe(true);
+    expect(canDoctorMarkVisitComplete("2026-11-23T15:00:00Z", now)).toBe(true);
+    // Later the same day is not completable yet.
+    expect(canDoctorMarkVisitComplete("2026-11-24T15:00:00Z", now)).toBe(false);
+    expect(canDoctorMarkVisitComplete("2026-11-25T09:00:00Z", now)).toBe(false);
   });
 });

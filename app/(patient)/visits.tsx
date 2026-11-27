@@ -298,7 +298,7 @@ export default function PatientVisitsScreen() {
           ) : (
             filtered.map((visit) => {
               const join = visit.startsAt
-                ? telehealthJoinState(visit.startsAt)
+                ? telehealthJoinState(visit.startsAt, visit.endsAt)
                 : { showJoin: false, label: "" };
 
               return (

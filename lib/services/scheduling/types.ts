@@ -47,6 +47,15 @@ export interface SetBlackoutInput {
   setBy: BlackoutRule["setBy"];
 }
 
+export interface SetBlackoutResult {
+  rule: BlackoutRule;
+  /**
+   * Booked visits inside the window. They are left booked (a blackout never
+   * cancels a visit), so the caller should tell the user to handle them.
+   */
+  bookedVisitsInWindow: number;
+}
+
 export interface CreateAvailabilitySlotInput {
   doctorId: string;
   slotDate: string;
@@ -118,7 +127,7 @@ export interface SchedulingService {
   cancelAppointment(appointmentId: string): Promise<Appointment>;
   /** Admin: one page of appointments (newest first), filtered server-side. */
   listAppointmentsPage(query: AppointmentPageQuery): Promise<AppointmentPage>;
-  setBlackout(input: SetBlackoutInput): Promise<BlackoutRule>;
+  setBlackout(input: SetBlackoutInput): Promise<SetBlackoutResult>;
   listBlackouts(doctorId: string): Promise<BlackoutRule[]>;
   deleteBlackout(blackoutId: string): Promise<void>;
   listSlotsOnDate(doctorId: string, dateYmd: string): Promise<Slot[]>;

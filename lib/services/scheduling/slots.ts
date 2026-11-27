@@ -348,6 +348,24 @@ export const slotsMethods: Pick<
         );
       }
 
+      // A slot can carry a live visit without being 'booked' (older blackouts
+      // overwrote booked slots). Deleting it would leave the visit with no slot.
+      const { count: activeVisits, error: visitError } = await supabase
+        .from("appointments")
+        .select("id", { count: "exact", head: true })
+        .eq("slot_id", slotId)
+        .in("status", ["pending", "confirmed"]);
+
+      if (visitError) {
+        asNetworkError(visitError);
+      }
+      if ((activeVisits ?? 0) > 0) {
+        throw new SchedulingError(
+          "INVALID_REQUEST",
+          "This slot has a booked visit. Cancel or reschedule the visit first.",
+        );
+      }
+
       const { error: deleteError } = await supabase
         .from("appointment_slots")
         .delete()

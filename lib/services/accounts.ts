@@ -41,7 +41,41 @@ async function assertAdmin(): Promise<string> {
   return userId;
 }
 
+const deleteAccountMessages: Record<string, string> = {
+  NOT_AUTHENTICATED: "Your session has expired. Sign in again, then retry.",
+  STAFF_ACCOUNT:
+    "Doctor and administrator accounts are managed by the hospital. Ask an administrator to remove your account.",
+};
+
 export const accountsService = {
+  /**
+   * Permanently deletes the signed-in patient's account and data
+   * (delete_my_account RPC), then clears the local session. Upcoming visits
+   * are cancelled first so doctors are told and slots reopen.
+   */
+  async deleteMyAccount(): Promise<{ cancelledVisits: number }> {
+    const { data, error } = await supabase.rpc("delete_my_account");
+    if (error) {
+      asAccountError(error);
+    }
+
+    const result = (data ?? {}) as {
+      success?: boolean;
+      code?: string;
+      cancelled_visits?: number;
+    };
+    if (!result.success) {
+      throw new AccountError(
+        deleteAccountMessages[result.code ?? ""] ??
+          "Your account could not be deleted. Try again.",
+      );
+    }
+
+    // The user no longer exists on the server; only clear this device.
+    await supabase.auth.signOut({ scope: "local" });
+    return { cancelledVisits: result.cancelled_visits ?? 0 };
+  },
+
   async setProfileActive(
     targetUserId: string,
     isActive: boolean,

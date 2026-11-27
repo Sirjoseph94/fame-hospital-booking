@@ -50,6 +50,9 @@ export default function RootLayout() {
                 <Stack.Screen name="(patient)" />
                 <Stack.Screen name="(doctor)" />
                 <Stack.Screen name="(admin)" />
+                <Stack.Screen name="privacy" />
+                <Stack.Screen name="terms" />
+                <Stack.Screen name="delete-account" />
                 <Stack.Screen name="dev" />
               </Stack>
             </AuthBootstrap>
