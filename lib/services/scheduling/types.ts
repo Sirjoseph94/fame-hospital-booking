@@ -4,6 +4,7 @@ import type {
   ClinicSession,
   Doctor,
   DoctorDetail,
+  PatientSummary,
   RosterDoctor,
 } from "@/types/scheduling";
 
@@ -29,6 +30,7 @@ export interface CreateSessionsInput {
   startTime: string;
   endTime: string;
   capacity: number;
+  room?: string;
 }
 
 export interface CreateSessionsResult {
@@ -80,6 +82,14 @@ export interface SchedulingService {
   /** Creates the account holder's "self" beneficiary when missing and DOB/gender are available. */
   ensureSelfBeneficiary(accountHolderId: string): Promise<Beneficiary | null>;
   createBeneficiary(input: CreateBeneficiaryInput): Promise<Beneficiary>;
+  updateBeneficiary(
+    beneficiaryId: string,
+    changes: Omit<CreateBeneficiaryInput, "accountHolderId" | "relationship"> & {
+      relationship?: Beneficiary["relationship"];
+    },
+  ): Promise<Beneficiary>;
+  /** Hides a family member (kept for visit history). Not allowed for "self". */
+  removeBeneficiary(beneficiaryId: string): Promise<void>;
   listDoctors(): Promise<Doctor[]>;
   listDoctorsForAdmin(): Promise<RosterDoctor[]>;
   /** One doctor, including inactive ones (admin screens, schedule panel). */
@@ -87,6 +97,11 @@ export interface SchedulingService {
   setDoctorAcceptingBookings(
     doctorId: string,
     isAcceptingBookings: boolean,
+  ): Promise<DoctorDetail>;
+  /** Admin: a doctor's specialty and department. */
+  updateDoctorDetails(
+    doctorId: string,
+    details: { specialty: string; department: string },
   ): Promise<DoctorDetail>;
 
   /** Upcoming sessions a patient can book (scheduled, not ended, not full). */
@@ -100,6 +115,11 @@ export interface SchedulingService {
   listSessionsOnDate(dateYmd: string): Promise<ClinicSession[]>;
   createSessions(input: CreateSessionsInput): Promise<CreateSessionsResult>;
   cancelSession(sessionId: string, reason?: string): Promise<CancelSessionResult>;
+  /** Change an upcoming session's room and patient limit. */
+  updateSession(
+    sessionId: string,
+    changes: { room?: string; capacity: number },
+  ): Promise<void>;
 
   /** Reserves a place in a session; confirmed immediately. */
   bookSession(input: BookSessionInput): Promise<Appointment>;
@@ -115,6 +135,8 @@ export interface SchedulingService {
     appointments: Appointment[],
   ): Promise<Map<string, DoctorAgendaVisitContext>>;
   completeDoctorAppointment(appointmentId: string): Promise<Appointment>;
+  /** Doctor: the booked patient's details and previous visits with this doctor. */
+  getPatientSummary(appointment: Appointment): Promise<PatientSummary>;
   cancelAppointment(appointmentId: string): Promise<Appointment>;
   /** Admin: one page of appointments (newest first), filtered server-side. */
   listAppointmentsPage(query: AppointmentPageQuery): Promise<AppointmentPage>;

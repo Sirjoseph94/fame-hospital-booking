@@ -10,6 +10,9 @@ Requires Node 22.13+, 24.3+ or 26+ (odd-numbered Node releases are not supported
 - Persisted session (SecureStore on native, `localStorage` on web)
 - Role-guarded route groups: Patient, Doctor, Admin
 - Clinic sessions, first come, first served: doctors (or admins) create sessions with a patient limit, one-off or weekly; patients book a place instantly, for themselves or a family member, and can change session or cancel
+- Doctors: session agenda with an expandable patient summary; sessions with room and patient limit (editable); cancel with a reason patients see
+- Patients: doctor bios, edit/remove family members, recent updates (messages sent), account deletion
+- Admins: book/cancel/move on a patient's behalf, patient directory, doctor details and department, invite history, activity log, failed-message retry, hospital time zone
 - Doctor agenda/schedule, admin roster, capacity, and appointment views
 - Scheduling schema: `clinic_sessions`, capacity-checked booking RPCs, beneficiaries (legacy slot/hold/blackout tables remain but are unused)
 

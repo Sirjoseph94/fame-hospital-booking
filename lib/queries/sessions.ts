@@ -55,6 +55,18 @@ export function useCreateSessions() {
   });
 }
 
+export function useUpdateSession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { sessionId: string; room?: string; capacity: number }) =>
+      schedulingService.updateSession(input.sessionId, {
+        room: input.room,
+        capacity: input.capacity,
+      }),
+    onSettled: () => invalidateScheduling(queryClient),
+  });
+}
+
 export function useCancelSession() {
   const queryClient = useQueryClient();
   return useMutation({

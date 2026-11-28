@@ -1,5 +1,11 @@
 import { View } from "react-native";
-import { CalendarRange, ChartNoAxesColumn, UsersRound } from "lucide-react-native";
+import {
+  CalendarRange,
+  ChartNoAxesColumn,
+  Contact,
+  History,
+  UsersRound,
+} from "lucide-react-native";
 import { Tabs } from "expo-router";
 
 import { AdminSideNav } from "@/components/admin/admin-side-nav";
@@ -50,7 +56,22 @@ export default function AdminLayout() {
                 ),
               }}
             />
+            <Tabs.Screen
+              name="patients"
+              options={{
+                title: "Patients",
+                tabBarIcon: ({ color, size }) => <Contact color={color} size={size} />,
+              }}
+            />
+            <Tabs.Screen
+              name="activity"
+              options={{
+                title: "Activity",
+                tabBarIcon: ({ color, size }) => <History color={color} size={size} />,
+              }}
+            />
             <Tabs.Screen name="doctor" options={{ href: null }} />
+            <Tabs.Screen name="patient" options={{ href: null }} />
           </Tabs>
         </View>
       </View>

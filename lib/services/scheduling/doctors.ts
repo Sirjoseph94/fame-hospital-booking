@@ -41,7 +41,11 @@ async function fetchNextSessionByDoctor(): Promise<Map<string, NextOpenSession>>
 
 export const doctorsMethods: Pick<
   SchedulingService,
-  "listDoctors" | "getDoctor" | "listDoctorsForAdmin" | "setDoctorAcceptingBookings"
+  | "listDoctors"
+  | "getDoctor"
+  | "listDoctorsForAdmin"
+  | "setDoctorAcceptingBookings"
+  | "updateDoctorDetails"
 > = {
   async listDoctors() {
     await wait();
@@ -51,7 +55,7 @@ export const doctorsMethods: Pick<
       const { data, error } = await supabase
         .from("doctors")
         .select(
-          "id, specialty, department, is_accepting_bookings, is_active, profile:profiles(full_name)",
+          "id, specialty, department, bio, years_experience, is_accepting_bookings, is_active, profile:profiles(full_name)",
         )
         .eq("is_active", true);
 
@@ -155,6 +159,47 @@ export const doctorsMethods: Pick<
         asNetworkError(error ?? new Error("Could not update booking status."));
       }
 
+      return mapDoctorDetail(data as DoctorRow);
+    } catch (error) {
+      if (error instanceof SchedulingError) {
+        throw error;
+      }
+      asNetworkError(error);
+    }
+  },
+  async updateDoctorDetails(doctorId, details) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      const role = await getCurrentUserRole();
+      if (role !== "admin") {
+        throw new SchedulingError(
+          "FORBIDDEN",
+          "Only administrators can change a doctor's specialty or department.",
+        );
+      }
+      const specialty = details.specialty.trim();
+      const department = details.department.trim();
+      if (specialty.length < 2 || department.length < 2) {
+        throw new SchedulingError(
+          "INVALID_REQUEST",
+          "Enter a specialty and a department.",
+        );
+      }
+
+      const { data, error } = await supabase
+        .from("doctors")
+        .update({ specialty, department })
+        .eq("id", doctorId)
+        .select(
+          "id, specialty, department, is_accepting_bookings, is_active, profile:profiles(full_name, is_active)",
+        )
+        .single();
+
+      if (error || !data) {
+        asNetworkError(error ?? new Error("Could not update the doctor."));
+      }
       return mapDoctorDetail(data as DoctorRow);
     } catch (error) {
       if (error instanceof SchedulingError) {

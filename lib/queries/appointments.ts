@@ -111,6 +111,16 @@ export function useAdminAppointments(filter: AppointmentListFilter) {
   });
 }
 
+/** Doctor: one booked patient's details, loaded when the card is expanded. */
+export function usePatientSummary(appointment: Appointment, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.appointments.patientSummary(appointment.id),
+    queryFn: () => schedulingService.getPatientSummary(appointment),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
 // --------------------------------------------------------------- mutations
 // Every booking change moves session places and doctors' next open session
 // too, so they invalidate the whole scheduling cache — on success *and*

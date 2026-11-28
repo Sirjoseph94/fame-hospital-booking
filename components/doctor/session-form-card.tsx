@@ -115,6 +115,25 @@ export function SessionFormCard({
 
       <Controller
         control={control}
+        name="room"
+        render={({ field: { onBlur, onChange, value }, fieldState: { error } }) => (
+          <View className="gap-1">
+            <Text className="text-sm font-medium text-ink">Room (optional)</Text>
+            <FormTextInput
+              accessibilityLabel="Room"
+              maxLength={40}
+              onBlur={onBlur}
+              onChangeText={onChange}
+              placeholder="e.g. Consulting room 3"
+              value={value}
+            />
+            <FieldError message={error?.message} />
+          </View>
+        )}
+      />
+
+      <Controller
+        control={control}
         name="repeatWeekly"
         render={({ field: { onChange, value } }) => (
           <View className="min-h-12 flex-row items-center justify-between gap-3">

@@ -85,8 +85,17 @@ export default function BookDoctorScreen() {
             >
               <Card style={{ gap: 6 }}>
                 <Text className="text-lg font-semibold text-ink">{item.name}</Text>
-                <Text className="text-sm text-ink-muted">{item.specialty}</Text>
-                <Text className="text-sm text-ink-muted">{item.department}</Text>
+                <Text className="text-sm text-ink-muted">
+                  {item.specialty} · {item.department}
+                  {item.yearsExperience
+                    ? ` · ${item.yearsExperience} ${item.yearsExperience === 1 ? "year" : "years"}' experience`
+                    : ""}
+                </Text>
+                {item.bio ? (
+                  <Text className="text-sm text-ink" numberOfLines={3}>
+                    {item.bio}
+                  </Text>
+                ) : null}
                 {item.nextSession ? (
                   <Text className="text-sm text-available" selectable>
                     Next session {formatSessionWhen(item.nextSession)} ·{" "}

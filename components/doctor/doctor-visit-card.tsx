@@ -2,15 +2,19 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { ChevronDown, ChevronUp } from "lucide-react-native";
 
+import { PatientDetails } from "@/components/doctor/patient-details";
 import { Card } from "@/components/ui/card";
 import { visitStatusLabel } from "@/lib/visit-status-label";
 import { colors } from "@/lib/theme-colors";
 import type {
+  Appointment,
   AppointmentDbStatus,
   AppointmentStatus,
 } from "@/types/scheduling";
 
 interface DoctorVisitCardProps {
+  /** When set, the card offers an expandable patient summary. */
+  appointment?: Appointment;
   /** 1-based booking number within the session (not the arrival order). */
   position?: number;
   beneficiaryName: string;
@@ -28,6 +32,7 @@ interface DoctorVisitCardProps {
 
 /** One patient booked into a session, on the doctor's agenda. */
 export function DoctorVisitCard({
+  appointment,
   position,
   beneficiaryName,
   startsAt,
@@ -110,6 +115,8 @@ export function DoctorVisitCard({
             )}
           </View>
         ) : null}
+
+        {appointment ? <PatientDetails appointment={appointment} /> : null}
 
         {showActions ? (
           <View className="flex-row flex-wrap gap-2 border-t border-surface-muted pt-3">

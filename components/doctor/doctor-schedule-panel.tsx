@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -10,13 +10,14 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { addDays, format, getDay, parseISO } from "date-fns";
 
+import { CancelSessionSheet } from "@/components/doctor/cancel-session-sheet";
+import { EditSessionSheet } from "@/components/doctor/edit-session-sheet";
 import { SessionFormCard } from "@/components/doctor/session-form-card";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { CardSkeleton, ScreenLoadingSkeleton } from "@/components/ui/skeleton";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
-import { confirmAsync } from "@/lib/confirm";
 import { useDoctor, useSetDoctorAcceptingBookings } from "@/lib/queries/doctors";
 import {
   useCancelSession,
@@ -37,6 +38,8 @@ const LIST_DAYS = 56;
 interface DoctorSchedulePanelProps {
   doctorId: string;
   intro?: string;
+  /** Rendered at the top of the scrolling content (e.g. admin-only cards). */
+  header?: ReactNode;
 }
 
 function errorText(cause: unknown, fallback: string): string {
@@ -50,17 +53,21 @@ function defaultValues(): ClinicSessionFormFields {
     startTime: "09:00",
     endTime: "13:00",
     capacity: "20",
+    room: "",
     repeatWeekly: false,
     weekdays: [getDay(new Date())],
     weeks: "4",
   };
 }
 
-export function DoctorSchedulePanel({ doctorId, intro }: DoctorSchedulePanelProps) {
+export function DoctorSchedulePanel({ doctorId, intro, header }: DoctorSchedulePanelProps) {
   const [userRefreshing, setUserRefreshing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [listMessage, setListMessage] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<ClinicSession | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<ClinicSession | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const fromYmd = format(new Date(), "yyyy-MM-dd");
   const toYmd = format(addDays(new Date(), LIST_DAYS), "yyyy-MM-dd");
@@ -113,6 +120,7 @@ export function DoctorSchedulePanel({ doctorId, intro }: DoctorSchedulePanelProp
         startTime: values.startTime,
         endTime: values.endTime,
         capacity: Number.parseInt(values.capacity, 10),
+        room: values.room,
       });
       const added =
         result.created === 1 ? "Added 1 session." : `Added ${result.created} sessions.`;
@@ -139,31 +147,24 @@ export function DoctorSchedulePanel({ doctorId, intro }: DoctorSchedulePanelProp
     }
   };
 
-  const cancel = async (session: ClinicSession) => {
-    const times = `${format(parseISO(session.startsAt), "EEE, MMM d")} · ${formatSessionTimes(session)}`;
-    const confirmed = await confirmAsync({
-      title: session.bookedCount > 0 ? "Cancel this session?" : "Remove this session?",
-      message:
-        session.bookedCount > 0
-          ? `${times}. ${session.bookedCount} booked ${session.bookedCount === 1 ? "patient" : "patients"} will be notified that it's cancelled.`
-          : `${times}. Nobody has booked it yet.`,
-      confirmText: session.bookedCount > 0 ? "Cancel session" : "Remove session",
-      cancelText: "Keep it",
-      destructive: true,
-    });
-    if (!confirmed) {
+  const confirmCancel = async (reason: string) => {
+    if (!cancelTarget) {
       return;
     }
-    setListMessage(null);
+    setCancelError(null);
     try {
-      const result = await cancelSession.mutateAsync({ sessionId: session.id });
+      const result = await cancelSession.mutateAsync({
+        sessionId: cancelTarget.id,
+        reason,
+      });
+      setCancelTarget(null);
       setListMessage(
         result.removed
           ? "Session removed."
           : `Session cancelled. ${result.cancelledBookings} ${result.cancelledBookings === 1 ? "patient was" : "patients were"} notified.`,
       );
     } catch (cause) {
-      setListMessage(errorText(cause, "Could not cancel the session."));
+      setCancelError(errorText(cause, "Could not cancel the session."));
     }
   };
 
@@ -199,6 +200,7 @@ export function DoctorSchedulePanel({ doctorId, intro }: DoctorSchedulePanelProp
       }
     >
       {intro ? <Text className="text-sm text-ink-muted">{intro}</Text> : null}
+      {header}
       <RefreshErrorNotice
         message={refreshError ? errorText(refreshError, "Could not refresh schedule.") : null}
       />
@@ -265,24 +267,38 @@ export function DoctorSchedulePanel({ doctorId, intro }: DoctorSchedulePanelProp
                           {cancelled
                             ? "Cancelled"
                             : `${session.bookedCount} of ${session.capacity} booked${ended ? " · ended" : ""}`}
+                          {session.room ? ` · ${session.room}` : ""}
                         </Text>
                       </View>
                       {!cancelled && !ended ? (
-                        <Pressable
-                          accessibilityLabel={`Cancel session ${formatSessionTimes(session)} on ${section.title}`}
-                          accessibilityRole="button"
-                          accessibilityState={{
-                            disabled: cancellingId === session.id,
-                            busy: cancellingId === session.id,
-                          }}
-                          className="min-h-11 justify-center rounded-lg border border-ink-muted px-3 web:hover:opacity-90"
-                          disabled={cancellingId === session.id}
-                          onPress={() => void cancel(session)}
-                        >
-                          <Text className="text-sm font-semibold text-ink-muted">
-                            {cancellingId === session.id ? "Cancelling…" : "Cancel"}
-                          </Text>
-                        </Pressable>
+                        <View className="flex-row gap-2">
+                          <Pressable
+                            accessibilityLabel={`Edit session ${formatSessionTimes(session)} on ${section.title}`}
+                            accessibilityRole="button"
+                            className="min-h-11 justify-center rounded-lg border border-primary px-3 web:hover:opacity-90"
+                            onPress={() => setEditTarget(session)}
+                          >
+                            <Text className="text-sm font-semibold text-primary">Edit</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityLabel={`Cancel session ${formatSessionTimes(session)} on ${section.title}`}
+                            accessibilityRole="button"
+                            accessibilityState={{
+                              disabled: cancellingId === session.id,
+                              busy: cancellingId === session.id,
+                            }}
+                            className="min-h-11 justify-center rounded-lg border border-ink-muted px-3 web:hover:opacity-90"
+                            disabled={cancellingId === session.id}
+                            onPress={() => {
+                              setCancelError(null);
+                              setCancelTarget(session);
+                            }}
+                          >
+                            <Text className="text-sm font-semibold text-ink-muted">
+                              {cancellingId === session.id ? "Cancelling…" : "Cancel"}
+                            </Text>
+                          </Pressable>
+                        </View>
                       ) : null}
                     </View>
                   </Card>
@@ -292,6 +308,34 @@ export function DoctorSchedulePanel({ doctorId, intro }: DoctorSchedulePanelProp
           ))
         )}
       </View>
+
+      {cancelTarget ? (
+        <CancelSessionSheet
+          key={cancelTarget.id}
+          busy={cancelSession.isPending}
+          error={cancelError}
+          session={cancelTarget}
+          onConfirm={(reason) => void confirmCancel(reason)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setCancelTarget(null);
+            }
+          }}
+        />
+      ) : null}
+
+      {editTarget ? (
+        <EditSessionSheet
+          key={editTarget.id}
+          session={editTarget}
+          onOpenChange={(open) => {
+            if (!open) {
+              setEditTarget(null);
+            }
+          }}
+          onSaved={setListMessage}
+        />
+      ) : null}
     </ScrollView>
   );
 }

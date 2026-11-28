@@ -22,6 +22,8 @@ export interface Beneficiary {
   gender: string;
   nationalId?: string;
   hospitalFileId?: string;
+  /** Removed by the account holder; kept so past visits keep their name. */
+  archived?: boolean;
 }
 
 export interface Doctor {
@@ -32,6 +34,8 @@ export interface Doctor {
   /** The earliest session with places left, or null when none is open. */
   nextSession: NextOpenSession | null;
   isAcceptingBookings: boolean;
+  bio?: string;
+  yearsExperience?: number;
 }
 
 export interface NextOpenSession {
@@ -79,6 +83,7 @@ export interface ClinicSession {
   bookedCount: number;
   placesLeft: number;
   status: ClinicSessionStatus;
+  room?: string;
   cancelReason?: string;
   /** Scheduled, not yet ended and not full. */
   isBookable: boolean;
@@ -100,6 +105,8 @@ export interface Appointment {
   doctorId: string;
   /** Clinic session; absent on bookings made before sessions existed. */
   sessionId?: string;
+  /** Set when the whole session was cancelled (reason may be empty). */
+  sessionCancelled?: { reason?: string };
   type: AppointmentType;
   status: AppointmentStatus;
   dbStatus: AppointmentDbStatus;
@@ -110,4 +117,33 @@ export interface Appointment {
   address?: string;
   reason?: string;
   notes?: string;
+}
+
+/** What a doctor sees about a booked patient (agenda "Patient details"). */
+export interface PatientSummary {
+  displayName: string;
+  relationship: BeneficiaryRelationship;
+  dob?: string;
+  gender?: string;
+  nationalId?: string;
+  hospitalFileId?: string;
+  /** Account holder (the person who booked). */
+  holderName: string;
+  holderPhone?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  /**
+   * Health details from the account holder's profile. Only set when the
+   * patient is the account holder ("self"); for family members the profile
+   * describes someone else.
+   */
+  health?: {
+    bloodType?: string;
+    allergies?: string;
+    medications?: string;
+    conditions?: string;
+    notes?: string;
+  };
+  /** Completed visits with this doctor, newest first (ISO dates). */
+  previousVisitDates: string[];
 }

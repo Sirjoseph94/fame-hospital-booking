@@ -20,6 +20,8 @@ interface VisitCardProps {
   dbStatus?: AppointmentDbStatus;
   room?: string;
   proxyTag?: string;
+  /** The whole clinic session was cancelled (with an optional reason). */
+  sessionCancelled?: { reason?: string };
   onPress?: () => void;
 }
 
@@ -32,6 +34,7 @@ export function VisitCard({
   dbStatus,
   room,
   proxyTag,
+  sessionCancelled,
   onPress,
 }: VisitCardProps) {
   const when = formatSessionWhen({ startsAt, endsAt });
@@ -69,11 +72,19 @@ export function VisitCard({
         </Text>
       ) : null}
 
+      {status === "cancelled" && sessionCancelled ? (
+        <Text className="text-sm text-ink" selectable>
+          The doctor&apos;s clinic was cancelled
+          {sessionCancelled.reason ? `: ${sessionCancelled.reason}` : "."} Please book
+          another session.
+        </Text>
+      ) : null}
+
       {room ? (
         <View className="flex-row items-center gap-2">
           <MapPin color={colors["ink-muted"]} size={18} />
           <Text className="text-sm text-ink" selectable>
-            Room {room}
+            {/^\d/.test(room) ? `Room ${room}` : room}
           </Text>
         </View>
       ) : null}

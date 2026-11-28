@@ -15,6 +15,8 @@ export const queryKeys = {
       ["appointments", "doctor", doctorId, fromYmd, toYmd] as const,
     admin: (filter: AppointmentListFilter) =>
       ["appointments", "admin", filter] as const,
+    patientSummary: (appointmentId: string) =>
+      ["appointments", "patient-summary", appointmentId] as const,
   },
   doctors: {
     all: ["doctors"] as const,
@@ -36,6 +38,16 @@ export const queryKeys = {
   notificationPreferences: (userId: string) =>
     ["notification-preferences", userId] as const,
   invites: ["invites"] as const,
+  auditLog: ["audit-log"] as const,
+  failedDeliveries: ["failed-deliveries"] as const,
+  patients: {
+    all: ["patients"] as const,
+    search: (term: string) => ["patients", "search", term] as const,
+    detail: (patientId: string) => ["patients", "detail", patientId] as const,
+  },
+  hospitalSettings: ["hospital-settings"] as const,
+  updatesAll: ["updates"] as const,
+  updates: (userId: string) => ["updates", userId] as const,
 };
 
 /**
@@ -47,5 +59,7 @@ export function invalidateScheduling(queryClient: QueryClient): Promise<void> {
     queryClient.invalidateQueries({ queryKey: queryKeys.appointments.all }),
     queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all }),
     queryClient.invalidateQueries({ queryKey: queryKeys.doctors.all }),
+    // Booking changes send messages, which show up as updates.
+    queryClient.invalidateQueries({ queryKey: queryKeys.updatesAll }),
   ]).then(() => undefined);
 }

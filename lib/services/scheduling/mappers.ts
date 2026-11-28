@@ -24,6 +24,7 @@ export interface BeneficiaryRow {
   gender: string;
   national_id: string | null;
   hospital_file_id: string | null;
+  archived_at?: string | null;
 }
 
 export interface DoctorRow {
@@ -32,6 +33,8 @@ export interface DoctorRow {
   department: string;
   is_accepting_bookings: boolean;
   is_active: boolean;
+  bio?: string | null;
+  years_experience?: number | null;
   profile:
     | { full_name: string; is_active?: boolean }
     | { full_name: string; is_active?: boolean }[]
@@ -51,6 +54,7 @@ export interface SessionAvailabilityRow {
   booked_count: number;
   places_left: number;
   is_bookable: boolean;
+  room: string | null;
 }
 
 /** A row of the doctor_next_open_session view. */
@@ -63,7 +67,14 @@ export interface NextOpenSessionRow {
   places_left: number;
 }
 
-type SessionTimes = { session_date: string; start_time: string; end_time: string };
+type SessionTimes = {
+  session_date: string;
+  start_time: string;
+  end_time: string;
+  room?: string | null;
+  cancel_reason?: string | null;
+  status?: string;
+};
 
 export interface AppointmentRow {
   id: string;
@@ -94,6 +105,7 @@ export function mapBeneficiary(row: BeneficiaryRow): Beneficiary {
     gender: row.gender,
     nationalId: row.national_id ?? undefined,
     hospitalFileId: row.hospital_file_id ?? undefined,
+    archived: Boolean(row.archived_at),
   };
 }
 
@@ -132,6 +144,8 @@ export function mapDoctor(
     nextSession,
     isAcceptingBookings:
       row.is_accepting_bookings && row.is_active && accountActive,
+    bio: row.bio?.trim() || undefined,
+    yearsExperience: row.years_experience ?? undefined,
   };
 }
 
@@ -191,6 +205,7 @@ export function mapSession(row: SessionAvailabilityRow): ClinicSession {
     bookedCount: row.booked_count,
     placesLeft: row.places_left,
     status: mapSessionStatus(row.status),
+    room: row.room ?? undefined,
     cancelReason: row.cancel_reason ?? undefined,
     isBookable: row.is_bookable,
   };
@@ -236,18 +251,23 @@ function appointmentWindow(row: AppointmentRow): { startsAt: string; endsAt: str
 
 export function mapAppointment(row: AppointmentRow): Appointment {
   const { startsAt, endsAt } = appointmentWindow(row);
+  const session = Array.isArray(row.session) ? row.session[0] : row.session;
   return {
     id: row.id,
     accountHolderId: row.account_holder_id ?? row.patient_id,
     beneficiaryId: row.beneficiary_id ?? row.patient_id,
     doctorId: row.doctor_id,
     sessionId: row.session_id ?? undefined,
+    sessionCancelled:
+      session?.status === "cancelled"
+        ? { reason: session.cancel_reason?.trim() || undefined }
+        : undefined,
     type: row.appointment_type,
     status: mapDbAppointmentStatus(row.status),
     dbStatus: mapDbStatus(row.status),
     startsAt,
     endsAt,
-    room: row.room ?? undefined,
+    room: row.room ?? session?.room ?? undefined,
     videoUrl: row.video_url ?? undefined,
     address: row.address ?? undefined,
     reason: row.reason ?? undefined,

@@ -2,6 +2,7 @@ import { View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 
 import { AdminDoctorHeader } from "@/components/admin/admin-doctor-header";
+import { DoctorDetailsCard } from "@/components/admin/doctor-details-card";
 import { DoctorSchedulePanel } from "@/components/doctor/doctor-schedule-panel";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { ScreenLoadingSkeleton } from "@/components/ui/skeleton";
@@ -27,7 +28,7 @@ export default function AdminDoctorScheduleScreen() {
 
   return (
     <View className="flex-1 bg-surface-muted">
-      <AdminDoctorHeader doctor={doctor} subtitle="Manage schedule" />
+      <AdminDoctorHeader doctor={doctor} subtitle="Details and schedule" />
 
       {error ? (
         <View className="flex-1 justify-center px-4">
@@ -47,6 +48,7 @@ export default function AdminDoctorScheduleScreen() {
       ) : (
         <DoctorSchedulePanel
           doctorId={doctorId}
+          header={doctor ? <DoctorDetailsCard key={doctor.id} doctor={doctor} /> : null}
           intro="Hospital admin: add or cancel this doctor's clinic sessions and control whether they accept new bookings."
         />
       )}

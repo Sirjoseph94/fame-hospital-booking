@@ -7,6 +7,7 @@ import {
   asNetworkError,
   consumeFailure,
   getCurrentUserId,
+  invokeSchedulingRpc,
   wait,
 } from "./internal";
 import { type BeneficiaryRow, mapBeneficiary } from "./mappers";
@@ -14,7 +15,11 @@ import type { SchedulingService } from "./types";
 
 export const beneficiariesMethods: Pick<
   SchedulingService,
-  "listBeneficiaries" | "ensureSelfBeneficiary" | "createBeneficiary"
+  | "listBeneficiaries"
+  | "ensureSelfBeneficiary"
+  | "createBeneficiary"
+  | "updateBeneficiary"
+  | "removeBeneficiary"
 > = {
   async listBeneficiaries(accountHolderId) {
     await wait();
@@ -178,6 +183,56 @@ export const beneficiariesMethods: Pick<
       }
 
       return mapBeneficiary(data as BeneficiaryRow);
+    } catch (error) {
+      if (error instanceof SchedulingError) {
+        throw error;
+      }
+      asNetworkError(error);
+    }
+  },
+  async updateBeneficiary(beneficiaryId, changes) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      // RLS limits updates to the caller's own family members.
+      const update: Record<string, unknown> = {
+        display_name: changes.displayName.trim(),
+        dob: changes.dob,
+        gender: changes.gender,
+        national_id: changes.nationalId?.trim() || null,
+        hospital_file_id: changes.hospitalFileId?.trim() || null,
+      };
+      if (changes.relationship && changes.relationship !== "self") {
+        update.relationship = changes.relationship;
+      }
+      const { data, error } = await supabase
+        .from("beneficiaries")
+        .update(update)
+        .eq("id", beneficiaryId)
+        .select("*")
+        .maybeSingle();
+
+      if (error) {
+        asNetworkError(error);
+      }
+      if (!data) {
+        throw new SchedulingError("FORBIDDEN", "You can only edit your own family members.");
+      }
+      return mapBeneficiary(data as BeneficiaryRow);
+    } catch (error) {
+      if (error instanceof SchedulingError) {
+        throw error;
+      }
+      asNetworkError(error);
+    }
+  },
+  async removeBeneficiary(beneficiaryId) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      await invokeSchedulingRpc("remove_beneficiary", { p_beneficiary_id: beneficiaryId });
     } catch (error) {
       if (error instanceof SchedulingError) {
         throw error;

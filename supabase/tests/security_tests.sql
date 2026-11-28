@@ -591,4 +591,170 @@ select t.ok((select count(*) from public.clinic_sessions) = 0, 'deactivated user
 reset role;
 update public.profiles set is_active = true where id = '00000000-0000-0000-0000-0000000000a2';
 
+-- ---------------------------------------------------------------- doctor department via invite
+reset role;
+select set_config('request.jwt.claims', '', false);
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-0000000000d2', 'd2@x.test', '{"full_name":"Doc Two"}');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+insert into public.doctor_invites (code, email, specialty, department, created_by)
+values ('INVITE02', 'd2@x.test', 'Paediatrics', 'Children''s Clinic', auth.uid());
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d2","email":"d2@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.claim_doctor_invite('INVITE02')->>'success')::boolean, 'second doctor claims an invite with a department');
+reset role;
+select t.ok((select department from public.doctors where id = '00000000-0000-0000-0000-0000000000d2') = 'Children''s Clinic',
+  'invite department is copied to the doctor');
+select t.ok((select department from public.doctors where id = '00000000-0000-0000-0000-0000000000d1') = 'Outpatients',
+  'invite without a department falls back to Outpatients');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+update public.doctors set department = 'Cardiology Unit' where id = '00000000-0000-0000-0000-0000000000d2';
+select t.ok((select department from public.doctors where id = '00000000-0000-0000-0000-0000000000d2') = 'Cardiology Unit',
+  'admin can change a doctor''s department');
+reset role;
+
+-- ---------------------------------------------------------------- session room + edits
+-- S1 (capacity 2) currently holds Q's booking. Fill it with P's child.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.book_session((select id from s_ids where k = 'S1'),
+  (select id from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child' limit 1))->>'success')::boolean,
+  'P books the last place in S1 for their child');
+select t.ok(public.update_clinic_session((select id from s_ids where k = 'S1'), 'Room 4', 5)->>'code' = 'FORBIDDEN',
+  'patient cannot edit a session');
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.update_clinic_session((select id from s_ids where k = 'S1'), 'Room 4', 1)->>'code' = 'CAPACITY_BELOW_BOOKED',
+  'patient limit cannot go below places already booked');
+select t.ok((public.update_clinic_session((select id from s_ids where k = 'S1'), '  Room 4 ', 3)->>'success')::boolean,
+  'doctor sets room and raises the limit');
+select t.ok((select room from public.clinic_session_availability where session_id = (select id from s_ids where k = 'S1')) = 'Room 4'
+  and (select places_left from public.clinic_session_availability where session_id = (select id from s_ids where k = 'S1')) = 1,
+  'availability shows the trimmed room and the new places left');
+select t.ok(public.update_clinic_session((select id from s_ids where k = 'S2'), 'Room 1', 5)->>'code' = 'NOT_MODIFIABLE',
+  'a cancelled session cannot be edited');
+select t.ok((public.create_clinic_sessions(auth.uid(), current_date + 60, 1,
+  array[extract(dow from current_date + 60)::int], '09:00', '10:00', 4, 'Room 9')->>'created')::int = 1,
+  'sessions can be created with a room');
+select t.ok((select room from public.clinic_sessions where doctor_id = auth.uid() and session_date = current_date + 60) = 'Room 9',
+  'the room is stored on the session');
+select t.ok(public.create_clinic_sessions(auth.uid(), current_date + 61, 1,
+  array[extract(dow from current_date + 61)::int], '09:00', '10:00', 4, repeat('x', 41))->>'code' = 'INVALID_INPUT',
+  'room names longer than 40 characters are rejected');
+reset role;
+
+-- ---------------------------------------------------------------- admin acts on bookings
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.move_session_booking(
+    (select id from public.appointments where session_id = (select id from s_ids where k = 'S1')
+       and beneficiary_id = '00000000-0000-0000-0000-0000000000b2' and status <> 'cancelled'),
+    (select id from public.clinic_sessions where doctor_id = '00000000-0000-0000-0000-0000000000d1' and session_date = current_date + 50))->>'success')::boolean,
+  'admin moves a patient''s booking to another session');
+select t.ok((public.cancel_appointment(
+    (select id from public.appointments where session_id = (select id from s_ids where k = 'S1')
+       and status <> 'cancelled' limit 1))->>'success')::boolean,
+  'admin cancels a patient''s booking');
+reset role;
+select t.ok((select places_left from public.clinic_session_availability where session_id = (select id from s_ids where k = 'S1')) = 3,
+  'S1 is empty again after the admin move and cancel');
+
+-- ---------------------------------------------------------------- doctor patient summary access
+reset role;
+select set_config('request.jwt.claims', '', false);
+update public.profiles set allergies = 'Penicillin' where id = '00000000-0000-0000-0000-0000000000a1';
+-- D has (and had) bookings from P; D2 never has.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((select allergies from public.profiles where id = '00000000-0000-0000-0000-0000000000a1') = 'Penicillin',
+  'doctor can read health details of a patient booked with them');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d2","email":"d2@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(not exists (select 1 from public.profiles where id = '00000000-0000-0000-0000-0000000000a1'),
+  'another doctor cannot read that patient''s profile');
+reset role;
+
+-- ---------------------------------------------------------------- family members: edit and remove
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+update public.beneficiaries set display_name = 'Kiddo', hospital_file_id = 'F-1001'
+where account_holder_id = auth.uid() and relationship = 'child';
+select t.ok((select display_name from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child') = 'Kiddo',
+  'patient can edit a family member');
+select t.ok(public.remove_beneficiary('00000000-0000-0000-0000-0000000000b1')->>'code' = 'CANNOT_REMOVE_SELF',
+  'patient cannot remove their own "self" record');
+select t.ok(public.remove_beneficiary('00000000-0000-0000-0000-0000000000b2')->>'code' = 'NOT_FOUND',
+  'patient cannot remove another account''s family member');
+-- Give the child an upcoming booking: removal is refused until it's cancelled.
+insert into s_ids
+select 'KID', (public.book_session((select id from s_ids where k = 'S1'),
+  (select id from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child'))->>'appointment_id')::uuid;
+select t.ok(public.remove_beneficiary((select id from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child'))->>'code' = 'HAS_UPCOMING_VISITS',
+  'family member with an upcoming booking cannot be removed');
+select t.ok((public.cancel_appointment((select id from s_ids where k = 'KID'))->>'success')::boolean, 'cancel the child''s booking');
+select t.ok((public.remove_beneficiary((select id from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child'))->>'success')::boolean,
+  'family member is removed once nothing is booked');
+select t.ok((select archived_at is not null from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child'),
+  'removal archives the row (history keeps the name)');
+select t.ok(public.book_session((select id from s_ids where k = 'S1'),
+  (select id from public.beneficiaries where account_holder_id = auth.uid() and relationship = 'child'))->>'code' = 'BENEFICIARY_REMOVED',
+  'a removed family member cannot be booked');
+reset role;
+
+-- ---------------------------------------------------------------- hospital time zone
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+do $$ begin
+  begin
+    update public.hospital_settings set time_zone = 'Mars/Olympus_Mons' where id = 1;
+    raise exception 'FAIL: invalid time zone accepted';
+  exception when invalid_parameter_value then raise notice 'PASS: unknown time zone is rejected'; end;
+end $$;
+update public.hospital_settings set time_zone = 'Africa/Lagos' where id = 1;
+select t.ok((select time_zone from public.hospital_settings where id = 1) = 'Africa/Lagos', 'admin sets a valid time zone');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
+set role authenticated;
+do $$ declare n int; begin
+  update public.hospital_settings set time_zone = 'UTC' where id = 1;
+  get diagnostics n = row_count;
+  perform t.ok(n = 0, 'patient cannot change the time zone');
+end $$;
+reset role;
+update public.hospital_settings set time_zone = current_setting('TimeZone') where id = 1;
+
+-- ---------------------------------------------------------------- failed notifications (admin)
+reset role;
+select set_config('request.jwt.claims', '', false);
+update public.notification_deliveries
+set status = 'failed', error = 'SMTP 550', attempts = 3
+where id = (select id from public.notification_deliveries
+            where recipient_id = '00000000-0000-0000-0000-0000000000a1' order by created_at limit 1);
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((select count(*) from public.notification_deliveries where status = 'failed') = 1,
+  'admin can see failed deliveries for any recipient');
+select t.ok((public.retry_notification_delivery((select id from public.notification_deliveries where status = 'failed'))->>'success')::boolean,
+  'admin retries a failed delivery');
+select t.ok((select count(*) from public.notification_deliveries where status = 'failed') = 0
+  and exists (select 1 from public.notification_deliveries where error is null and attempts = 0 and status = 'pending'
+              and recipient_id = '00000000-0000-0000-0000-0000000000a1'),
+  'retry resets the row to pending with a fresh attempt count');
+select t.ok(public.retry_notification_delivery(gen_random_uuid())->>'code' = 'NOT_MODIFIABLE',
+  'retrying a row that is not failed is refused');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a2","email":"q@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(not exists (select 1 from public.notification_deliveries where recipient_id = '00000000-0000-0000-0000-0000000000a1'),
+  'patients still only see their own deliveries');
+select t.ok(public.retry_notification_delivery(gen_random_uuid())->>'code' = 'FORBIDDEN',
+  'patients cannot retry deliveries');
+reset role;
+
 \echo ALL TESTS PASSED

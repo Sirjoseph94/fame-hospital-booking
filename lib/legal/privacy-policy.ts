@@ -61,7 +61,7 @@ export const privacyPolicy: LegalDocument = {
           list: [
             "You can see and edit your own profile, family members and appointments.",
             "A doctor you have an appointment with can see your profile, including any health details you have added, along with the appointment and the details of the person the visit is for.",
-            "Hospital administrators can see accounts, family members and appointments so they can run schedules and help you.",
+            "Hospital administrators can see accounts, family members, appointments and whether our messages to you were delivered, so they can run schedules and help you.",
           ],
         },
         "We use these service providers to run the app. They process information only on our behalf:",

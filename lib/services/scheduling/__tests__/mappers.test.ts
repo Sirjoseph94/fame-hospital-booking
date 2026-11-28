@@ -63,6 +63,7 @@ describe("session mappers", () => {
         booked_count: 18,
         places_left: 2,
         is_bookable: true,
+        room: "Room 4",
       }),
     ).toEqual({
       id: "s1",
@@ -74,6 +75,7 @@ describe("session mappers", () => {
       bookedCount: 18,
       placesLeft: 2,
       status: "scheduled",
+      room: "Room 4",
       cancelReason: undefined,
       isBookable: true,
     });
@@ -82,7 +84,7 @@ describe("session mappers", () => {
   it("keeps a cancellation reason and maps unknown statuses to scheduled", () => {
     const base = {
       session_id: "s1", doctor_id: "d1", session_date: "2026-12-01", start_time: "09:00",
-      end_time: "10:00", capacity: 5, booked_count: 0, places_left: 5, is_bookable: false,
+      end_time: "10:00", capacity: 5, booked_count: 0, places_left: 5, is_bookable: false, room: null,
     };
     expect(mapSession({ ...base, status: "cancelled", cancel_reason: "Leave" })).toMatchObject({
       status: "cancelled",
@@ -124,6 +126,27 @@ describe("mapAppointment", () => {
       appointmentRow({ session: [{ session_date: "2026-12-03", start_time: "08:00", end_time: "10:00" }] }),
     );
     expect(mapped.endsAt).toBe("2026-12-03T10:00:00.000Z");
+  });
+
+  it("takes the room from the session unless the booking has its own", () => {
+    const withSessionRoom = appointmentRow({
+      session: { session_date: "2026-12-01", start_time: "09:00", end_time: "12:00", room: "Room 7" },
+    });
+    expect(mapAppointment(withSessionRoom).room).toBe("Room 7");
+    expect(mapAppointment({ ...withSessionRoom, room: "Room 2" }).room).toBe("Room 2");
+  });
+
+  it("flags bookings whose whole session was cancelled, with the reason", () => {
+    const base = { session_date: "2026-12-01", start_time: "09:00", end_time: "12:00" };
+    expect(
+      mapAppointment(appointmentRow({ status: "cancelled", session: { ...base, status: "cancelled", cancel_reason: " Doctor unwell " } }))
+        .sessionCancelled,
+    ).toEqual({ reason: "Doctor unwell" });
+    expect(
+      mapAppointment(appointmentRow({ status: "cancelled", session: { ...base, status: "cancelled", cancel_reason: null } }))
+        .sessionCancelled,
+    ).toEqual({ reason: undefined });
+    expect(mapAppointment(appointmentRow({ session: { ...base, status: "scheduled" } })).sessionCancelled).toBeUndefined();
   });
 
   it("falls back to the stored start + 30 min for bookings without a session", () => {

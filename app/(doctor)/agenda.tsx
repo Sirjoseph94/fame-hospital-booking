@@ -194,6 +194,11 @@ export default function DoctorAgendaScreen() {
               </Text>
             ) : null}
           </View>
+          {sessionInfo?.room ? (
+            <Text className="text-sm text-ink-muted" selectable>
+              {sessionInfo.room}
+            </Text>
+          ) : null}
           {cancelled && sessionInfo?.cancelReason ? (
             <Text className="text-sm text-ink-muted" selectable>
               Reason: {sessionInfo.cancelReason}
@@ -215,6 +220,7 @@ export default function DoctorAgendaScreen() {
           return (
             <DoctorVisitCard
               key={visit.id}
+              appointment={visit}
               beneficiaryName={visit.beneficiaryName}
               dbStatus={visit.dbStatus}
               manageBusy={manageBusyId === visit.id}

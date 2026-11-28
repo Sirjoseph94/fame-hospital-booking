@@ -4,21 +4,44 @@ import { parseISO } from "date-fns";
 
 import { doctorProxyTag } from "@/lib/doctor-agenda-helpers";
 import { supabase } from "@/lib/supabase";
-import type { Beneficiary } from "@/types/scheduling";
+import type { Beneficiary, PatientSummary } from "@/types/scheduling";
 
 import { SchedulingError } from "./errors";
 import {
   APPOINTMENT_SELECT,
+  appointmentManager,
   asNetworkError,
   assertCanManageAppointment,
   consumeFailure,
   fetchAppointmentRow,
   getCurrentUserId,
+  getCurrentUserRole,
   invokeSchedulingRpc,
   wait,
 } from "./internal";
 import { type AppointmentRow, mapAppointment } from "./mappers";
 import type { DoctorAgendaVisitContext, SchedulingService } from "./types";
+
+/**
+ * Fast, specific client-side check before cancelling or moving: the patient,
+ * the doctor, or an admin. The RPCs re-check everything server-side.
+ */
+async function assertCanChangeBooking(row: AppointmentRow): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (appointmentManager(row, userId)) {
+    assertCanManageAppointment(row, userId);
+    return;
+  }
+  if ((await getCurrentUserRole()) !== "admin") {
+    throw new SchedulingError("FORBIDDEN", "You cannot modify this appointment.");
+  }
+  if (row.status === "cancelled" || row.status === "completed") {
+    throw new SchedulingError(
+      "INVALID_REQUEST",
+      "This appointment can no longer be changed.",
+    );
+  }
+}
 
 function rethrow(error: unknown): never {
   if (error instanceof SchedulingError) {
@@ -35,6 +58,7 @@ export const appointmentsMethods: Pick<
   | "listDoctorAppointments"
   | "enrichDoctorAgendaVisits"
   | "completeDoctorAppointment"
+  | "getPatientSummary"
   | "cancelAppointment"
   | "listAppointmentsPage"
 > = {
@@ -76,8 +100,7 @@ export const appointmentsMethods: Pick<
     consumeFailure("NETWORK_ERROR");
 
     try {
-      const userId = await getCurrentUserId();
-      assertCanManageAppointment(await fetchAppointmentRow(appointmentId), userId);
+      await assertCanChangeBooking(await fetchAppointmentRow(appointmentId));
 
       await invokeSchedulingRpc("move_session_booking", {
         p_appointment_id: appointmentId,
@@ -242,13 +265,90 @@ export const appointmentsMethods: Pick<
       rethrow(error);
     }
   },
+  async getPatientSummary(appointment) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      const [
+        { data: beneficiary, error: benError },
+        { data: holder, error: holderError },
+        { data: previous, error: previousError },
+      ] = await Promise.all([
+        supabase
+          .from("beneficiaries")
+          .select("display_name, relationship, dob, gender, national_id, hospital_file_id")
+          .eq("id", appointment.beneficiaryId)
+          .maybeSingle(),
+        supabase
+          .from("profiles")
+          .select(
+            "full_name, phone, emergency_contact_name, emergency_contact_phone, blood_type, allergies, medications, medical_conditions, medical_notes",
+          )
+          .eq("id", appointment.accountHolderId)
+          .maybeSingle(),
+        supabase
+          .from("appointments")
+          .select("appointment_date")
+          .eq("doctor_id", appointment.doctorId)
+          .eq("beneficiary_id", appointment.beneficiaryId)
+          .eq("status", "completed")
+          .neq("id", appointment.id)
+          .order("appointment_date", { ascending: false })
+          .limit(5),
+      ]);
+
+      if (benError) {
+        asNetworkError(benError);
+      }
+      if (holderError) {
+        asNetworkError(holderError);
+      }
+      if (previousError) {
+        asNetworkError(previousError);
+      }
+
+      const text = (value: unknown) =>
+        typeof value === "string" && value.trim() ? value.trim() : undefined;
+      const relationship =
+        (beneficiary?.relationship as Beneficiary["relationship"] | undefined) ?? "self";
+      const holderName = text(holder?.full_name) ?? "Account holder";
+
+      const summary: PatientSummary = {
+        displayName: text(beneficiary?.display_name) ?? holderName,
+        relationship,
+        dob: text(beneficiary?.dob),
+        gender: text(beneficiary?.gender),
+        nationalId: text(beneficiary?.national_id),
+        hospitalFileId: text(beneficiary?.hospital_file_id),
+        holderName,
+        holderPhone: text(holder?.phone),
+        emergencyContactName: text(holder?.emergency_contact_name),
+        emergencyContactPhone: text(holder?.emergency_contact_phone),
+        previousVisitDates: ((previous ?? []) as { appointment_date: string }[]).map(
+          (row) => row.appointment_date,
+        ),
+      };
+      if (relationship === "self") {
+        summary.health = {
+          bloodType: text(holder?.blood_type),
+          allergies: text(holder?.allergies),
+          medications: text(holder?.medications),
+          conditions: text(holder?.medical_conditions),
+          notes: text(holder?.medical_notes),
+        };
+      }
+      return summary;
+    } catch (error) {
+      rethrow(error);
+    }
+  },
   async cancelAppointment(appointmentId) {
     await wait();
     consumeFailure("NETWORK_ERROR");
 
     try {
-      const userId = await getCurrentUserId();
-      assertCanManageAppointment(await fetchAppointmentRow(appointmentId), userId);
+      await assertCanChangeBooking(await fetchAppointmentRow(appointmentId));
 
       // Frees the place in the session (capacity is a live count).
       await invokeSchedulingRpc("cancel_appointment", {

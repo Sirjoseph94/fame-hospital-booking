@@ -3,6 +3,8 @@ import { usePathname, useRouter } from "expo-router";
 import {
   CalendarRange,
   ChartNoAxesColumn,
+  Contact,
+  History,
   UsersRound,
 } from "lucide-react-native";
 
@@ -12,6 +14,8 @@ const links = [
   { href: "/roster", label: "Roster", Icon: UsersRound },
   { href: "/appointments", label: "Appointments", Icon: CalendarRange },
   { href: "/capacity", label: "Capacity", Icon: ChartNoAxesColumn },
+  { href: "/patients", label: "Patients", Icon: Contact },
+  { href: "/activity", label: "Activity", Icon: History },
 ] as const;
 
 function isActivePath(pathname: string, href: string): boolean {

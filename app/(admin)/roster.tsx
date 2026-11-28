@@ -9,13 +9,18 @@ import {
 } from "react-native";
 import { addDays, format, parseISO } from "date-fns";
 import { router } from "expo-router";
+import { TimeZoneCard } from "@/components/admin/time-zone-card";
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { confirmAsync } from "@/lib/confirm";
 import { copyText } from "@/lib/copy-text";
-import { InviteError, type DoctorInvite } from "@/lib/services/invites";
+import {
+  effectiveInviteStatus,
+  InviteError,
+  type DoctorInvite,
+} from "@/lib/services/invites";
 import { doctorInviteFormSchema } from "@/lib/validation/invites";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
@@ -60,6 +65,7 @@ export default function AdminRosterScreen() {
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteSpecialty, setInviteSpecialty] = useState("");
+  const [inviteDepartment, setInviteDepartment] = useState("");
   const [inviteBio, setInviteBio] = useState("");
   const [inviteFee, setInviteFee] = useState("");
   const [inviteYears, setInviteYears] = useState("");
@@ -79,7 +85,10 @@ export default function AdminRosterScreen() {
   );
 
   const doctors = rosterQuery.data ?? [];
-  const invites = invitesQuery.data ?? [];
+  const allInvites = invitesQuery.data ?? [];
+  const invites = allInvites.filter((invite) => effectiveInviteStatus(invite) === "pending");
+  const inviteHistory = allInvites.filter((invite) => effectiveInviteStatus(invite) !== "pending");
+  const [showInviteHistory, setShowInviteHistory] = useState(false);
   const creatingInvite = createDoctorInvite.isPending;
   const revokingInviteId = revokeDoctorInvite.isPending
     ? revokeDoctorInvite.variables
@@ -116,6 +125,7 @@ export default function AdminRosterScreen() {
     const parsed = doctorInviteFormSchema.safeParse({
       email: inviteEmail,
       specialty: inviteSpecialty,
+      department: inviteDepartment || undefined,
       bio: inviteBio || undefined,
       consultationFee: inviteFee || undefined,
       yearsExperience: inviteYears || undefined,
@@ -141,6 +151,7 @@ export default function AdminRosterScreen() {
       const invite = await createDoctorInvite.mutateAsync({
         email: parsed.data.email,
         specialty: parsed.data.specialty,
+        department: parsed.data.department,
         bio: parsed.data.bio,
         consultationFee: fee,
         yearsExperience: years,
@@ -148,6 +159,7 @@ export default function AdminRosterScreen() {
       });
       setInviteEmail("");
       setInviteSpecialty("");
+      setInviteDepartment("");
       setInviteBio("");
       setInviteFee("");
       setInviteYears("");
@@ -256,6 +268,8 @@ export default function AdminRosterScreen() {
             message={refreshError ? loadErrorMessage(refreshError) : null}
           />
 
+          <TimeZoneCard />
+
           <Card style={{ gap: 12 }}>
             <Text className="text-base font-semibold text-ink">Invite doctor</Text>
             <Text className="text-sm text-ink-muted">
@@ -278,6 +292,15 @@ export default function AdminRosterScreen() {
                 accessibilityLabel="Doctor specialty"
                 onChangeText={setInviteSpecialty}
                 value={inviteSpecialty}
+              />
+            </View>
+            <View className="gap-1">
+              <Text className="text-sm font-medium text-ink">Department (optional)</Text>
+              <FormTextInput
+                accessibilityLabel="Doctor department"
+                onChangeText={setInviteDepartment}
+                placeholder="Outpatients"
+                value={inviteDepartment}
               />
             </View>
             <View className="gap-1">
@@ -393,6 +416,45 @@ export default function AdminRosterScreen() {
                 </Card>
               ))
             )}
+            {inviteHistory.length > 0 ? (
+              <Pressable
+                accessibilityLabel={showInviteHistory ? "Hide invite history" : "Show invite history"}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showInviteHistory }}
+                className="min-h-11 justify-center web:hover:opacity-80"
+                onPress={() => setShowInviteHistory((value) => !value)}
+              >
+                <Text className="text-sm font-semibold text-primary">
+                  {showInviteHistory ? "Hide" : "Show"} invite history ({inviteHistory.length})
+                </Text>
+              </Pressable>
+            ) : null}
+            {showInviteHistory
+              ? inviteHistory.map((invite) => {
+                  const status = effectiveInviteStatus(invite);
+                  return (
+                    <Card key={invite.id} style={{ gap: 4 }}>
+                      <View className="flex-row items-start justify-between gap-3">
+                        <View className="min-w-0 flex-1 gap-1">
+                          <Text className="text-sm font-semibold text-ink" selectable>
+                            {invite.email}
+                          </Text>
+                          <Text className="text-xs text-ink-muted">
+                            {invite.specialty}
+                            {invite.department ? ` · ${invite.department}` : ""} · created{" "}
+                            {format(parseISO(invite.createdAt), "MMM d, yyyy")}
+                          </Text>
+                        </View>
+                        <View className="rounded-full bg-surface-muted px-3 py-1">
+                          <Text className="text-xs font-semibold uppercase text-ink-muted">
+                            {status}
+                          </Text>
+                        </View>
+                      </View>
+                    </Card>
+                  );
+                })
+              : null}
           </View>
 
           <View className="gap-3">
@@ -449,7 +511,7 @@ export default function AdminRosterScreen() {
                       )}
                     </Pressable>
                     <Pressable
-                      accessibilityLabel={`Manage schedule for ${doctor.name}`}
+                      accessibilityLabel={`Details and schedule for ${doctor.name}`}
                       accessibilityRole="button"
                       className="min-h-11 flex-1 items-center justify-center rounded-xl border border-primary px-3 web:hover:opacity-90"
                       onPress={() =>
@@ -460,7 +522,7 @@ export default function AdminRosterScreen() {
                       }
                     >
                       <Text className="text-sm font-semibold text-primary">
-                        Schedule
+                        Details & schedule
                       </Text>
                     </Pressable>
                   </View>

@@ -43,6 +43,20 @@ export function useSetDoctorAcceptingBookings(doctorId: string) {
   });
 }
 
+/** Admin: change a doctor's specialty and department. */
+export function useUpdateDoctorDetails(doctorId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (details: { specialty: string; department: string }) =>
+      schedulingService.updateDoctorDetails(doctorId, details),
+    onSuccess: (detail) => {
+      queryClient.setQueryData(queryKeys.doctors.detail(doctorId), detail);
+    },
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.doctors.all }),
+  });
+}
+
 /** Admin: activate / deactivate a user's account. */
 export function useSetAccountActive() {
   const queryClient = useQueryClient();

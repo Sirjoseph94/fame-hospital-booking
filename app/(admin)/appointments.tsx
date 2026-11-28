@@ -7,6 +7,7 @@ import {
   View,
 } from "react-native";
 
+import { MoveSessionSheet } from "@/components/patient/move-session-sheet";
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -16,7 +17,13 @@ import {
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
-import { useAdminAppointments } from "@/lib/queries/appointments";
+import { confirmAsync, showAlert } from "@/lib/confirm";
+import { useNow } from "@/lib/hooks/use-now";
+import {
+  useAdminAppointments,
+  useCancelAppointment,
+  type AdminAppointmentRow,
+} from "@/lib/queries/appointments";
 import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { formatSessionWhen } from "@/lib/session-groups";
@@ -44,6 +51,11 @@ function loadErrorMessage(cause: unknown): string {
 export default function AdminAppointmentsScreen() {
   const [filter, setFilter] = useState<AppointmentFilter>("all");
   const [userRefreshing, setUserRefreshing] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<AdminAppointmentRow | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+  const cancelMutation = useCancelAppointment();
+  // Actions disappear once a visit's session has ended.
+  const now = useNow(60_000);
 
   // Each filter has its own cache entry, so switching filters never shows
   // another filter's rows (or a late response for one).
@@ -57,6 +69,29 @@ export default function AdminAppointmentsScreen() {
     appointmentsQuery.isError && appointmentsQuery.data
       ? loadErrorMessage(appointmentsQuery.error)
       : null;
+
+  const cancelBooking = async (appointment: AdminAppointmentRow) => {
+    const confirmed = await confirmAsync({
+      title: "Cancel this booking?",
+      message: `${appointment.beneficiaryName} with ${appointment.doctorName}, ${formatSessionWhen(appointment)}. The patient will be notified.`,
+      confirmText: "Cancel booking",
+      cancelText: "Keep booking",
+      destructive: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    setBanner(null);
+    try {
+      await cancelMutation.mutateAsync(appointment.id);
+      setBanner(`Cancelled ${appointment.beneficiaryName}'s booking.`);
+    } catch (cause) {
+      showAlert(
+        "Cancel failed",
+        cause instanceof SchedulingError ? cause.message : "Could not cancel the booking.",
+      );
+    }
+  };
 
   const refresh = async () => {
     setUserRefreshing(true);
@@ -124,6 +159,11 @@ export default function AdminAppointmentsScreen() {
           </View>
 
           <RefreshErrorNotice message={inlineError} />
+          {banner ? (
+            <Text accessibilityLiveRegion="polite" className="text-sm text-primary">
+              {banner}
+            </Text>
+          ) : null}
 
           {rows.length === 0 ? (
             <EmptyState message="No appointments match this filter." />
@@ -160,6 +200,33 @@ export default function AdminAppointmentsScreen() {
                       {appointment.proxyTag}
                     </Text>
                   ) : null}
+                  {appointment.status === "upcoming" &&
+                  new Date(appointment.endsAt).getTime() > now ? (
+                    <View className="flex-row flex-wrap gap-2 border-t border-surface-muted pt-3">
+                      {appointment.sessionId ? (
+                        <Pressable
+                          accessibilityLabel={`Change session for ${appointment.beneficiaryName}`}
+                          accessibilityRole="button"
+                          className="min-h-11 flex-1 items-center justify-center rounded-xl border border-primary px-3 web:hover:opacity-90"
+                          onPress={() => setMoveTarget(appointment)}
+                        >
+                          <Text className="text-sm font-semibold text-primary">Change session</Text>
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        accessibilityLabel={`Cancel booking for ${appointment.beneficiaryName}`}
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          busy: cancelMutation.isPending && cancelMutation.variables === appointment.id,
+                        }}
+                        className="min-h-11 flex-1 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
+                        disabled={cancelMutation.isPending}
+                        onPress={() => void cancelBooking(appointment)}
+                      >
+                        <Text className="text-sm font-semibold text-ink-muted">Cancel</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
                 </Card>
               );
             })
@@ -181,6 +248,23 @@ export default function AdminAppointmentsScreen() {
           ) : null}
         </ScrollView>
       )}
+
+      {moveTarget ? (
+        <MoveSessionSheet
+          key={moveTarget.id}
+          appointmentId={moveTarget.id}
+          currentSessionId={moveTarget.sessionId}
+          doctorId={moveTarget.doctorId}
+          doctorName={moveTarget.doctorName}
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setMoveTarget(null);
+            }
+          }}
+          onMoved={() => setBanner(`Moved ${moveTarget.beneficiaryName}'s booking.`)}
+        />
+      ) : null}
     </View>
   );
 }

@@ -28,7 +28,7 @@ export function SessionOption({
 
   return (
     <Pressable
-      accessibilityLabel={`${times}, ${note ?? places}`}
+      accessibilityLabel={`${times}, ${note ?? places}${session.room ? `, ${session.room}` : ""}`}
       accessibilityRole="radio"
       accessibilityState={{ checked: selected, disabled: disabled || !onPress }}
       className={[
@@ -45,6 +45,7 @@ export function SessionOption({
           className={`text-sm ${lowPlaces && !note ? "font-medium text-warning" : "text-ink-muted"}`}
         >
           {note ?? places}
+          {session.room ? <Text className="text-ink-muted"> · {session.room}</Text> : null}
         </Text>
       </View>
       {selected ? <Check color={colors.primary} size={20} /> : null}

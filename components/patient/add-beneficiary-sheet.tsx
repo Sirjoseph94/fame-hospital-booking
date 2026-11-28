@@ -30,6 +30,11 @@ interface AddBeneficiarySheetProps {
   onSubmit: (values: AddBeneficiaryFields) => Promise<boolean | void>;
   submitting: boolean;
   errorMessage: string | null;
+  /** Edit mode: starting values (render with a `key` per person). */
+  initialValues?: Partial<AddBeneficiaryFields>;
+  title?: string;
+  /** Hides the relationship picker (editing your own "self" record). */
+  hideRelationship?: boolean;
 }
 
 export function AddBeneficiarySheet({
@@ -38,7 +43,11 @@ export function AddBeneficiarySheet({
   onSubmit,
   submitting,
   errorMessage,
+  initialValues,
+  title = "Add new patient",
+  hideRelationship = false,
 }: AddBeneficiarySheetProps) {
+  const editing = Boolean(initialValues);
   const {
     control,
     handleSubmit,
@@ -53,12 +62,13 @@ export function AddBeneficiarySheet({
       gender: undefined,
       nationalId: "",
       hospitalFileId: "",
+      ...initialValues,
     },
   });
 
   const submit = async (values: AddBeneficiaryFields) => {
     const saved = await onSubmit(values);
-    if (saved !== false) {
+    if (saved !== false && !editing) {
       reset();
     }
   };
@@ -69,8 +79,8 @@ export function AddBeneficiarySheet({
     <Sheet
       open={open}
       onOpenChange={onOpenChange}
-      title="Add new patient"
-      accessibilityLabel="Add beneficiary form"
+      title={title}
+      accessibilityLabel={editing ? "Edit patient form" : "Add beneficiary form"}
     >
       <View className="gap-3">
         <FormTextField
@@ -135,7 +145,7 @@ export function AddBeneficiarySheet({
           />
         </View>
 
-        <View className="gap-1">
+        <View className={hideRelationship ? "hidden" : "gap-1"}>
           <Text className="text-sm font-medium text-ink">Relationship</Text>
           <Controller
             control={control}

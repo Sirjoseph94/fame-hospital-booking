@@ -290,6 +290,7 @@ export default function PatientVisitsScreen() {
                     endsAt={visit.endsAt!}
                     proxyTag={visit.proxyTag}
                     room={visit.room}
+                    sessionCancelled={visit.sessionCancelled}
                     startsAt={visit.startsAt!}
                     status={visit.status}
                   />

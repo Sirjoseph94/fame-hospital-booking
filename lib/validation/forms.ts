@@ -59,6 +59,7 @@ export const clinicSessionFormSchema = z
         const count = Number.parseInt(value, 10);
         return count >= 1 && count <= 200;
       }, "Between 1 and 200 patients."),
+    room: z.string().trim().max(40, "Keep the room under 40 characters."),
     repeatWeekly: z.boolean(),
     /** 0 = Sunday … 6 = Saturday; used when repeatWeekly is on. */
     weekdays: z.array(z.number().int().min(0).max(6)),

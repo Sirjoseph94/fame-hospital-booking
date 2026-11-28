@@ -14,7 +14,7 @@ import { mapSession, type SessionAvailabilityRow } from "./mappers";
 import type { SchedulingService } from "./types";
 
 const SESSION_COLUMNS =
-  "session_id, doctor_id, session_date, start_time, end_time, capacity, status, cancel_reason, booked_count, places_left, is_bookable";
+  "session_id, doctor_id, session_date, start_time, end_time, capacity, status, cancel_reason, booked_count, places_left, is_bookable, room";
 
 /** How far ahead patients can see bookable sessions. */
 const BOOKABLE_LIMIT = 60;
@@ -33,6 +33,7 @@ export const sessionsMethods: Pick<
   | "listSessionsOnDate"
   | "createSessions"
   | "cancelSession"
+  | "updateSession"
 > = {
   async listBookableSessions(doctorId) {
     await wait();
@@ -110,6 +111,7 @@ export const sessionsMethods: Pick<
         p_start_time: normalizeTimeForDb(input.startTime),
         p_end_time: normalizeTimeForDb(input.endTime),
         p_capacity: input.capacity,
+        p_room: input.room?.trim() || null,
       });
       return { created: payload.created ?? 0, skipped: payload.skipped ?? 0 };
     } catch (error) {
@@ -129,6 +131,20 @@ export const sessionsMethods: Pick<
         removed: payload.removed ?? false,
         cancelledBookings: payload.cancelled_bookings ?? 0,
       };
+    } catch (error) {
+      rethrow(error);
+    }
+  },
+  async updateSession(sessionId, { room, capacity }) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      await invokeSchedulingRpc("update_clinic_session", {
+        p_session_id: sessionId,
+        p_room: room?.trim() || null,
+        p_capacity: capacity,
+      });
     } catch (error) {
       rethrow(error);
     }

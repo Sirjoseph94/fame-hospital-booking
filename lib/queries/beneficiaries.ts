@@ -26,6 +26,31 @@ export function useCreateBeneficiary() {
   });
 }
 
+export function useUpdateBeneficiary(accountHolderId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      beneficiaryId: string;
+      changes: Parameters<typeof schedulingService.updateBeneficiary>[1];
+    }) => schedulingService.updateBeneficiary(input.beneficiaryId, input.changes),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.beneficiaries(accountHolderId ?? ""),
+      }),
+  });
+}
+
+export function useRemoveBeneficiary(accountHolderId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (beneficiaryId: string) => schedulingService.removeBeneficiary(beneficiaryId),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.beneficiaries(accountHolderId ?? ""),
+      }),
+  });
+}
+
 /** Creates the account holder's "self" beneficiary when missing. */
 export function useEnsureSelfBeneficiary() {
   const queryClient = useQueryClient();

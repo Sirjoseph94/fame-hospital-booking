@@ -63,6 +63,11 @@ The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). 
 | 14 | [`20260922000300_notification_retry.sql`](../supabase/migrations/20260922000300_notification_retry.sql) | `claimed_at` on `notification_deliveries` for retries / stuck-row recovery (see §12 sweep) |
 | 15 | [`20261127000000_account_deletion.sql`](../supabase/migrations/20261127000000_account_deletion.sql) | `delete_my_account()` RPC: patient self-service deletion (App Store / Google Play). Cancels upcoming visits, releases holds, deletes the auth user (data cascades). **Redeploy `dispatch-notifications`** (§12) with it so doctors' "visit cancelled" messages keep the visit details |
 | 16 | [`20261128000000_clinic_sessions.sql`](../supabase/migrations/20261128000000_clinic_sessions.sql) | **Clinic sessions** (first come, first served): `clinic_sessions`, `clinic_session_availability` and `doctor_next_open_session` views, RPCs `create_clinic_sessions`, `cancel_clinic_session`, `book_session`, `move_session_booking`; `hospital_settings.time_zone` (**set it**, see §6a). Notification trigger updated (`visit_booked`; doctors not messaged per patient). **Redeploy `dispatch-notifications`** (§12) |
+| 17 | [`20261128000100_doctor_department.sql`](../supabase/migrations/20261128000100_doctor_department.sql) | `doctor_invites.department`; `claim_doctor_invite` copies it to the doctor (default "Outpatients") |
+| 18 | [`20261128000200_session_room.sql`](../supabase/migrations/20261128000200_session_room.sql) | `clinic_sessions.room`; `create_clinic_sessions` gains `p_room` (old 7-argument version dropped); `update_clinic_session` (room + patient limit, never below places booked) |
+| 19 | [`20261128000300_remove_family_members.sql`](../supabase/migrations/20261128000300_remove_family_members.sql) | `beneficiaries.archived_at`; `remove_beneficiary` (not "self", not with upcoming visits); `book_session` refuses removed family members |
+| 20 | [`20261128000400_validate_time_zone.sql`](../supabase/migrations/20261128000400_validate_time_zone.sql) | Trigger rejecting unknown `hospital_settings.time_zone` values (an invalid zone would break every session check) |
+| 21 | [`20261128000500_admin_notification_deliveries.sql`](../supabase/migrations/20261128000500_admin_notification_deliveries.sql) | Admins read `notification_deliveries`; `retry_notification_delivery` resets a failed row for the §12 retry sweep. **Redeploy `dispatch-notifications`** (room and cancellation reason in messages) |
 
 ### 2a. Existing databases (set up through the SQL Editor)
 
@@ -189,7 +194,7 @@ Booking is by **clinic session**, first come, first served. A session is a docto
 
 Capacity is a live count of non-cancelled bookings, checked under a row lock on the session, so the last place can't be sold twice. Clients cannot write `clinic_sessions` or change `appointments.session_id` directly.
 
-**Set the hospital time zone** (session times are local wall-clock times; the database runs in UTC). It decides when a session has "ended" for booking:
+**Set the hospital time zone** (session times are local wall-clock times; the database runs in UTC). It decides when a session has "ended" for booking. Admins can set it on **Roster → Hospital time zone**, or in SQL:
 
 ```sql
 update public.hospital_settings set time_zone = 'Africa/Lagos' where id = 1;  -- your IANA zone

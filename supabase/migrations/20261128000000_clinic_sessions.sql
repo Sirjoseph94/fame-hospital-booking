@@ -108,7 +108,10 @@ create unique index if not exists appointments_one_per_session_beneficiary
 --    Not security_invoker: it must count appointments the caller can't read.
 --    It only exposes counts, and returns nothing to deactivated accounts.
 -- -------------------------------------------------------------------------
-create or replace view public.clinic_session_availability as
+-- Dropped and recreated (not "or replace") so a later migration can add
+-- columns and the chain still re-runs cleanly.
+drop view if exists public.clinic_session_availability cascade;
+create view public.clinic_session_availability as
 select
   s.id as session_id,
   s.doctor_id,

@@ -13,6 +13,8 @@ export interface AppointmentContext {
   startTime: string;
   /** Set for clinic-session bookings (first come, first served). */
   sessionEndTime?: string | null;
+  /** Why the clinic session was cancelled, when it was. */
+  cancelReason?: string | null;
   appointmentType: string;
   patientName: string;
   doctorName: string;
@@ -67,7 +69,9 @@ export function buildPushContent(
     case "visit_cancelled":
       return {
         title: "Visit cancelled",
-        body: `The visit on ${when} with Dr. ${ctx.doctorName} was cancelled.`,
+        body: ctx.cancelReason
+          ? `Dr. ${ctx.doctorName}'s clinic on ${when} was cancelled: ${ctx.cancelReason}. Please book another session.`
+          : `The visit on ${when} with Dr. ${ctx.doctorName} was cancelled.`,
       };
     case "visit_rescheduled":
       return {
@@ -87,7 +91,7 @@ export function buildPushContent(
     case "visit_booked":
       return {
         title: "Visit booked",
-        body: `You're booked with Dr. ${ctx.doctorName}: ${when}. Patients are seen in order of arrival, so come early.`,
+        body: `You're booked with Dr. ${ctx.doctorName}: ${when}${ctx.room ? `, ${ctx.room}` : ""}. Patients are seen in order of arrival, so come early.`,
       };
     default:
       return { title: "FAME Hospital", body: "You have a scheduling update." };

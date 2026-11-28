@@ -134,6 +134,11 @@ export default function BookConfirmationScreen() {
                   {formatSessionWhen(visitWindow)}
                 </Text>
               ) : null}
+              {booked.room ? (
+                <Text className="text-sm text-ink" selectable>
+                  {booked.room}
+                </Text>
+              ) : null}
               {beneficiaryName ? (
                 <Text className="text-sm text-ink-muted" selectable>
                   Patient: {beneficiaryName}

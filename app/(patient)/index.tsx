@@ -12,6 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AddBeneficiarySheet } from "@/components/patient/add-beneficiary-sheet";
 import { SetupSelfBeneficiarySheet } from "@/components/patient/setup-self-beneficiary-sheet";
 import { HospitalFooter } from "@/components/patient/hospital-footer";
+import { RecentUpdatesCard } from "@/components/patient/recent-updates-card";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { BeneficiaryPill } from "@/components/ui/beneficiary-pill";
 import { Card } from "@/components/ui/card";
@@ -81,6 +82,11 @@ export default function PatientHomeScreen() {
   ]);
 
   const beneficiaries = beneficiariesQuery.data ?? EMPTY_BENEFICIARIES;
+  // Removed family members keep their names on past visits but can't be booked.
+  const activeBeneficiaries = useMemo(
+    () => beneficiaries.filter((row) => !row.archived),
+    [beneficiaries],
+  );
   const doctors = doctorsQuery.data ?? EMPTY_DOCTORS;
   const appointmentRows = appointmentsQuery.data;
 
@@ -172,10 +178,10 @@ export default function PatientHomeScreen() {
     if (!preferredBeneficiaryId || beneficiaries.length === 0) {
       return;
     }
-    if (!beneficiaries.some((row) => row.id === preferredBeneficiaryId)) {
+    if (!activeBeneficiaries.some((row) => row.id === preferredBeneficiaryId)) {
       resetBookingToSelf();
     }
-  }, [beneficiaries, preferredBeneficiaryId, resetBookingToSelf]);
+  }, [activeBeneficiaries, beneficiaries.length, preferredBeneficiaryId, resetBookingToSelf]);
 
   const selfBeneficiary = useMemo(
     () => pickSelfBeneficiary(beneficiaries),
@@ -184,7 +190,7 @@ export default function PatientHomeScreen() {
 
   const bookingBeneficiary = useMemo(() => {
     if (preferredBeneficiaryId) {
-      const preferred = beneficiaries.find(
+      const preferred = activeBeneficiaries.find(
         (row) => row.id === preferredBeneficiaryId,
       );
       if (preferred) {
@@ -192,7 +198,7 @@ export default function PatientHomeScreen() {
       }
     }
     return selfBeneficiary ?? null;
-  }, [beneficiaries, preferredBeneficiaryId, selfBeneficiary]);
+  }, [activeBeneficiaries, preferredBeneficiaryId, selfBeneficiary]);
 
   /**
    * The mutation already refetched the list; also make sure the new row is
@@ -478,6 +484,8 @@ export default function PatientHomeScreen() {
             </View>
           </View>
 
+          {userId ? <RecentUpdatesCard userId={userId} /> : null}
+
           <HospitalFooter />
         </ScrollView>
       )}
@@ -511,7 +519,7 @@ export default function PatientHomeScreen() {
               <Text className="font-semibold text-primary">Book for myself</Text>
             </Pressable>
           )}
-          {beneficiaries
+          {activeBeneficiaries
             .filter((beneficiary) => beneficiary.relationship !== "self")
             .map((beneficiary) => (
               <BeneficiaryPill

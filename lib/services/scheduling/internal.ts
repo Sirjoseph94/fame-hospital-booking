@@ -84,6 +84,7 @@ export type SchedulingRpcPayload = {
   skipped?: number;
   removed?: boolean;
   cancelled_bookings?: number;
+  booked?: number;
 };
 
 /** Error for a `{ success: false, code }` response from a scheduling RPC. */
@@ -128,6 +129,23 @@ export function schedulingErrorFromRpc(code: string | undefined): SchedulingErro
         "INVALID_REQUEST",
         "A booking can only move to another session with the same doctor.",
       );
+    case "CAPACITY_BELOW_BOOKED":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "The patient limit can't be lower than the number of patients already booked.",
+      );
+    case "CANNOT_REMOVE_SELF":
+      return new SchedulingError("INVALID_REQUEST", "You can't remove yourself.");
+    case "HAS_UPCOMING_VISITS":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "This person has upcoming visits. Cancel them first, then remove them.",
+      );
+    case "BENEFICIARY_REMOVED":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "This person was removed from your family members.",
+      );
     case "INVALID_INPUT":
       return new SchedulingError(
         "INVALID_REQUEST",
@@ -147,7 +165,9 @@ export async function invokeSchedulingRpc(
     | "move_session_booking"
     | "cancel_appointment"
     | "create_clinic_sessions"
-    | "cancel_clinic_session",
+    | "update_clinic_session"
+    | "cancel_clinic_session"
+    | "remove_beneficiary",
   args: Record<string, unknown> = {},
 ): Promise<SchedulingRpcPayload> {
   const { data, error } = await supabase.rpc(fn, args);
@@ -213,7 +233,7 @@ export function normalizeTimeForDb(timeHm: string): string {
 
 /** Columns every appointment query selects (the session gives the visit window). */
 export const APPOINTMENT_SELECT =
-  "*, session:clinic_sessions(session_date, start_time, end_time)";
+  "*, session:clinic_sessions(session_date, start_time, end_time, room, status, cancel_reason)";
 
 export type AppointmentManager = "doctor" | "patient";
 

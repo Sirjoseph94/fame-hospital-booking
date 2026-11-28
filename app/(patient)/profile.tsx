@@ -12,6 +12,7 @@ import { Link, router } from "expo-router";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { NotificationPreferencesCard } from "@/components/notifications/notification-preferences-card";
+import { FamilyMembersCard } from "@/components/patient/family-members-card";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
@@ -324,6 +325,8 @@ export default function PatientProfileScreen() {
               </View>
             ))}
           </Card>
+
+          {session?.userId ? <FamilyMembersCard userId={session.userId} /> : null}
 
           {session?.userId ? (
             <NotificationPreferencesCard
