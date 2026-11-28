@@ -1035,4 +1035,41 @@ set role authenticated;
 select t.ok(public.visit_report(current_date - 7, current_date)->>'code' = 'FORBIDDEN', 'doctors cannot run the admin report');
 reset role;
 
+-- =================================================================== rewritten policies (query performance)
+-- Same visibility as before the policies were rewritten to evaluate the
+-- caller once per query.
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(exists (select 1 from public.beneficiaries where id = '00000000-0000-0000-0000-0000000000b1'),
+  'doctor reads the family record of a patient booked with them');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d2","email":"d2@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(not exists (select 1 from public.beneficiaries where id = '00000000-0000-0000-0000-0000000000b1'),
+  'another doctor cannot read that family record');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(exists (select 1 from public.profiles where id = '00000000-0000-0000-0000-0000000000a1')
+    and exists (select 1 from public.beneficiaries where id = '00000000-0000-0000-0000-0000000000b1')
+    and exists (select 1 from public.appointments where account_holder_id = '00000000-0000-0000-0000-0000000000a1'),
+  'admin still reads every profile, family record and visit');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a2","email":"q@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(not exists (select 1 from public.appointments where account_holder_id = '00000000-0000-0000-0000-0000000000a1')
+    and not exists (select 1 from public.beneficiaries where id = '00000000-0000-0000-0000-0000000000b1'),
+  'a patient cannot read another account''s visits or family records');
+reset role;
+select set_config('request.jwt.claims', '', false);
+set role anon;
+select t.ok(
+  (select count(*) from public.profiles) = 0
+  and (select count(*) from public.appointments) = 0
+  and (select count(*) from public.beneficiaries) = 0
+  and (select count(*) from public.doctors) = 0
+  and (select count(*) from public.notification_deliveries) = 0,
+  'signed-out visitors read no profiles, visits, family records, doctors or deliveries');
+reset role;
+
 \echo ALL TESTS PASSED

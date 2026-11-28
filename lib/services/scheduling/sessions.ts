@@ -1,5 +1,7 @@
 // Clinic sessions: listing availability, creating and cancelling sessions.
 
+import { format, subDays } from "date-fns";
+
 import { supabase } from "@/lib/supabase";
 
 import { SchedulingError } from "./errors";
@@ -41,10 +43,15 @@ export const sessionsMethods: Pick<
     consumeFailure("NETWORK_ERROR");
 
     try {
+      // in_booking_window is computed, so it can't use an index on its own.
+      // The date floor lets Postgres skip the doctor's past sessions. It is
+      // two days back so a device clock in another time zone never cuts off
+      // a session that is still bookable at the hospital.
       const { data, error } = await supabase
         .from("clinic_session_availability")
         .select(SESSION_COLUMNS)
         .eq("doctor_id", doctorId)
+        .gte("session_date", format(subDays(new Date(), 2), "yyyy-MM-dd"))
         .eq("in_booking_window", true)
         .order("session_date", { ascending: true })
         .order("start_time", { ascending: true })

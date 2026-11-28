@@ -363,10 +363,14 @@ export const appointmentsMethods: Pick<
         query = query.eq("status", "cancelled");
       }
 
-      // Fetch one extra row to know whether another page exists.
+      // Fetch one extra row to know whether another page exists. Every visit
+      // in a session shares its date and start time, so id breaks ties:
+      // without it, offset paging can repeat or skip rows between pages.
+      const ascending = filter === "upcoming";
       const { data, error } = await query
-        .order("appointment_date", { ascending: filter === "upcoming" })
-        .order("start_time", { ascending: filter === "upcoming" })
+        .order("appointment_date", { ascending })
+        .order("start_time", { ascending })
+        .order("id", { ascending })
         .range(offset, offset + limit);
 
       if (error) {
