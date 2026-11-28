@@ -1,63 +1,48 @@
 import { Pressable, Text, View } from "react-native";
-import { format, parseISO } from "date-fns";
-import { CalendarClock, MapPin, Video } from "lucide-react-native";
+import { CalendarClock, MapPin } from "lucide-react-native";
 
 import { Card } from "@/components/ui/card";
-import { visitStatusLabel } from "@/lib/visit-status-label";
+import { formatSessionWhen } from "@/lib/session-groups";
+import { visitStatusLabel, type VisitProgress } from "@/lib/visit-status-label";
 import { colors } from "@/lib/theme-colors";
 import type {
   AppointmentDbStatus,
   AppointmentStatus,
-  AppointmentType,
 } from "@/types/scheduling";
 
 interface VisitCardProps {
   beneficiaryName: string;
   doctorName: string;
+  /** Session window. */
   startsAt: string;
-  type: AppointmentType;
+  endsAt: string;
   status: AppointmentStatus;
   dbStatus?: AppointmentDbStatus;
   room?: string;
-  address?: string;
   proxyTag?: string;
-  telehealthJoinLabel?: string;
+  /** The whole clinic session was cancelled (with an optional reason). */
+  sessionCancelled?: { reason?: string };
+  /** Check-in / queue state on the day. */
+  progress?: VisitProgress;
   onPress?: () => void;
-  onJoinTelehealth?: () => void;
-}
-
-function typeLabel(type: AppointmentType): string {
-  if (type === "in-clinic") {
-    return "In clinic";
-  }
-  if (type === "telehealth") {
-    return "Telehealth";
-  }
-  return "Home visit";
 }
 
 export function VisitCard({
   beneficiaryName,
   doctorName,
   startsAt,
-  type,
+  endsAt,
   status,
   dbStatus,
   room,
-  address,
   proxyTag,
-  telehealthJoinLabel,
+  sessionCancelled,
+  progress,
   onPress,
-  onJoinTelehealth,
 }: VisitCardProps) {
-  const when = format(parseISO(startsAt), "EEE, MMM d · h:mm a");
-  const badge = visitStatusLabel(status, dbStatus, "patient", startsAt);
-  const summary = `${badge} visit for ${beneficiaryName} with ${doctorName}`;
-  const showTelehealthJoin =
-    telehealthJoinLabel &&
-    status === "upcoming" &&
-    type === "telehealth" &&
-    dbStatus === "confirmed";
+  const when = formatSessionWhen({ startsAt, endsAt });
+  const badge = visitStatusLabel(status, dbStatus, "patient", startsAt, new Date(), progress);
+  const summary = `${badge} visit for ${beneficiaryName} with ${doctorName}, ${when}`;
 
   const body = (
     <Card style={{ gap: 12 }}>
@@ -70,42 +55,49 @@ export function VisitCard({
             {doctorName}
           </Text>
         </View>
-        <View className="rounded-full bg-surface-muted px-3 py-1">
-          <Text className="text-xs font-semibold uppercase text-ink-muted">
+        <View
+          className={[
+            "rounded-full px-3 py-1",
+            status === "missed" ? "bg-danger/10" : progress?.calledAt ? "bg-available/15" : "bg-surface-muted",
+          ].join(" ")}
+        >
+          <Text
+            className={[
+              "text-xs font-semibold uppercase",
+              status === "missed" ? "text-danger" : "text-ink-muted",
+            ].join(" ")}
+          >
             {badge}
           </Text>
         </View>
       </View>
 
       <View className="flex-row items-center gap-2">
-        <View className="text-ink-muted">
-          <CalendarClock color={colors["ink-muted"]} size={18} />
-        </View>
-        <Text className="text-base text-ink" selectable>
+        <CalendarClock color={colors["ink-muted"]} size={18} />
+        <Text className="min-w-0 flex-1 text-base text-ink" selectable>
           {when}
         </Text>
       </View>
 
-      <Text className="text-sm text-ink-muted">{typeLabel(type)}</Text>
-
-      {type === "in-clinic" && room ? (
-        <View className="flex-row items-center gap-2">
-          <View className="text-ink-muted">
-            <MapPin color={colors["ink-muted"]} size={18} />
-          </View>
-          <Text className="text-sm text-ink" selectable>
-            Room {room}
-          </Text>
-        </View>
+      {status === "upcoming" && !progress?.checkedInAt ? (
+        <Text className="text-sm text-ink-muted">
+          Seen in order of arrival. Check in with the app when you reach reception.
+        </Text>
       ) : null}
 
-      {type === "home-visit" && address ? (
+      {status === "cancelled" && sessionCancelled ? (
+        <Text className="text-sm text-ink" selectable>
+          The doctor&apos;s clinic was cancelled
+          {sessionCancelled.reason ? `: ${sessionCancelled.reason}` : "."} Please book
+          another session.
+        </Text>
+      ) : null}
+
+      {room ? (
         <View className="flex-row items-center gap-2">
-          <View className="text-ink-muted">
-            <MapPin color={colors["ink-muted"]} size={18} />
-          </View>
+          <MapPin color={colors["ink-muted"]} size={18} />
           <Text className="text-sm text-ink" selectable>
-            {address}
+            {/^\d/.test(room) ? `Room ${room}` : room}
           </Text>
         </View>
       ) : null}
@@ -115,36 +107,19 @@ export function VisitCard({
           {proxyTag}
         </Text>
       ) : null}
-
-      {showTelehealthJoin ? (
-        <Pressable
-          accessibilityLabel={telehealthJoinLabel}
-          accessibilityRole="button"
-          className="min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-primary px-4 web:hover:opacity-90"
-          onPress={onJoinTelehealth}
-        >
-          <View className="text-surface">
-            <Video color={colors.surface} size={18} />
-          </View>
-          <Text className="text-base font-semibold text-surface">
-            {telehealthJoinLabel}
-          </Text>
-        </Pressable>
-      ) : null}
     </Card>
   );
 
   if (!onPress) {
-    return (
-      <View accessibilityLabel={summary}>{body}</View>
-    );
+    return <View accessibilityLabel={summary}>{body}</View>;
   }
 
   return (
     <Pressable
+      accessibilityHint="Opens the visit"
       accessibilityLabel={summary}
       accessibilityRole="button"
-      className="web:hover:opacity-95"
+      className="web:hover:opacity-95 active:opacity-90"
       onPress={onPress}
     >
       {body}

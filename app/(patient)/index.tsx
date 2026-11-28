@@ -7,12 +7,13 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
-import * as Linking from "expo-linking";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { AddBeneficiarySheet } from "@/components/patient/add-beneficiary-sheet";
+import { CheckInSheet } from "@/components/patient/check-in-sheet";
+import { QueueStatusCard } from "@/components/patient/queue-status-card";
 import { SetupSelfBeneficiarySheet } from "@/components/patient/setup-self-beneficiary-sheet";
-import { HospitalFooter } from "@/components/patient/hospital-footer";
+import { RecentUpdatesCard } from "@/components/patient/recent-updates-card";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { BeneficiaryPill } from "@/components/ui/beneficiary-pill";
 import { Card } from "@/components/ui/card";
@@ -22,13 +23,12 @@ import {
   HomeScreenSkeleton,
   ScreenLoadingSkeleton,
 } from "@/components/ui/skeleton";
-import { Sheet } from "@/components/ui/sheet";
+import { afterSheetCloses, Sheet } from "@/components/ui/sheet";
 import { VisitCard } from "@/components/ui/visit-card";
 import { ShellHeader } from "@/components/shell-header";
 import { confirmAsync } from "@/lib/confirm";
 import { useNow } from "@/lib/hooks/use-now";
 import { useBreakpoint } from "@/lib/platform";
-import { telehealthJoinState } from "@/lib/telehealth-join";
 import {
   doctorNameById,
   lastBookedDoctorId,
@@ -46,6 +46,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { useBookingStore } from "@/lib/stores/booking";
 import { usePatientBookingPrefs } from "@/lib/stores/patient-booking-prefs";
+import { usePendingCheckIn } from "@/lib/stores/pending-check-in";
 import { useSessionStore } from "@/lib/stores/session";
 import { SchedulingError } from "@/lib/services/scheduling";
 import type { AddBeneficiaryFields } from "@/components/patient/add-beneficiary-sheet";
@@ -83,6 +84,11 @@ export default function PatientHomeScreen() {
   ]);
 
   const beneficiaries = beneficiariesQuery.data ?? EMPTY_BENEFICIARIES;
+  // Removed family members keep their names on past visits but can't be booked.
+  const activeBeneficiaries = useMemo(
+    () => beneficiaries.filter((row) => !row.archived),
+    [beneficiaries],
+  );
   const doctors = doctorsQuery.data ?? EMPTY_DOCTORS;
   const appointmentRows = appointmentsQuery.data;
 
@@ -100,9 +106,21 @@ export default function PatientHomeScreen() {
   const resetBookingToSelf = usePatientBookingPrefs((state) => state.resetToSelf);
 
   const [startingBooking, setStartingBooking] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
+  const [homeMessage, setHomeMessage] = useState<string | null>(null);
   const startingBookingRef = useRef(false);
 
-  // Re-render every minute so telehealth join windows stay current.
+  // Signed in after scanning the reception poster: continue to check-in.
+  const pendingCheckInCode = usePendingCheckIn((state) => state.code);
+  const clearPendingCheckIn = usePendingCheckIn((state) => state.setCode);
+  useEffect(() => {
+    if (pendingCheckInCode) {
+      clearPendingCheckIn(null);
+      router.push({ pathname: "/check-in", params: { code: pendingCheckInCode } });
+    }
+  }, [clearPendingCheckIn, pendingCheckInCode]);
+
+  // Re-render every minute so the next-visit card drops visits whose session ended.
   useNow(60_000);
 
   const beginReturningFlow = useBookingStore((state) => state.beginReturningFlow);
@@ -135,10 +153,7 @@ export default function PatientHomeScreen() {
     void Promise.all(homeQueries.map((query) => query.refetch()));
   };
 
-  const returningLine = useMemo((): {
-    doctorName: string;
-    appointmentType: Appointment["type"];
-  } | null => {
+  const returningLine = useMemo((): { doctorName: string } | null => {
     const self = pickSelfBeneficiary(beneficiaries);
     const lastBooking = lastBookedDoctorId(appointmentRows ?? []);
     const doctorName = lastBooking
@@ -150,29 +165,27 @@ export default function PatientHomeScreen() {
       lastBooking.appointmentType !== "home-visit" &&
       doctorName
     ) {
-      return { doctorName, appointmentType: lastBooking.appointmentType };
+      return { doctorName };
     }
     return null;
   }, [appointmentRows, beneficiaries, doctors]);
 
   const upcomingVisit = useMemo(() => {
     const next = nextUpcomingAppointment(appointmentRows ?? []);
-    if (!next?.startsAt) {
+    if (!next?.startsAt || !next.endsAt) {
       return null;
     }
     const beneficiary =
       beneficiaries.find((row) => row.id === next.beneficiaryId) ??
       pickSelfBeneficiary(beneficiaries);
     return {
+      visit: { ...next, startsAt: next.startsAt, endsAt: next.endsAt },
       beneficiaryName: beneficiary?.displayName ?? "Patient",
       doctorName: doctorNameById(doctors, next.doctorId) ?? "Doctor",
       startsAt: next.startsAt,
       endsAt: next.endsAt,
-      type: next.type,
       dbStatus: next.dbStatus,
-      videoUrl: next.videoUrl,
       room: next.room,
-      address: next.address,
     };
   }, [appointmentRows, beneficiaries, doctors]);
 
@@ -180,10 +193,10 @@ export default function PatientHomeScreen() {
     if (!preferredBeneficiaryId || beneficiaries.length === 0) {
       return;
     }
-    if (!beneficiaries.some((row) => row.id === preferredBeneficiaryId)) {
+    if (!activeBeneficiaries.some((row) => row.id === preferredBeneficiaryId)) {
       resetBookingToSelf();
     }
-  }, [beneficiaries, preferredBeneficiaryId, resetBookingToSelf]);
+  }, [activeBeneficiaries, beneficiaries.length, preferredBeneficiaryId, resetBookingToSelf]);
 
   const selfBeneficiary = useMemo(
     () => pickSelfBeneficiary(beneficiaries),
@@ -192,7 +205,7 @@ export default function PatientHomeScreen() {
 
   const bookingBeneficiary = useMemo(() => {
     if (preferredBeneficiaryId) {
-      const preferred = beneficiaries.find(
+      const preferred = activeBeneficiaries.find(
         (row) => row.id === preferredBeneficiaryId,
       );
       if (preferred) {
@@ -200,7 +213,7 @@ export default function PatientHomeScreen() {
       }
     }
     return selfBeneficiary ?? null;
-  }, [beneficiaries, preferredBeneficiaryId, selfBeneficiary]);
+  }, [activeBeneficiaries, preferredBeneficiaryId, selfBeneficiary]);
 
   /**
    * The mutation already refetched the list; also make sure the new row is
@@ -265,9 +278,8 @@ export default function PatientHomeScreen() {
         beneficiaryId: self.id,
         doctorId: last.doctorId,
         doctorName: doctor.name,
-        appointmentType: last.appointmentType,
       });
-      router.push("/book/slot");
+      router.push("/book/session");
       return;
     }
 
@@ -328,7 +340,7 @@ export default function PatientHomeScreen() {
       });
       cacheCreatedBeneficiary(session.userId, created);
       setAddPatientOpen(false);
-      void confirmAsync({
+      afterSheetCloses(() => void confirmAsync({
         title: `Added ${created.displayName}`,
         message:
           "Book an appointment for them now, or add them to your list only?",
@@ -345,7 +357,7 @@ export default function PatientHomeScreen() {
           `Ready to book for ${created.displayName}.`,
         );
         router.push("/book/doctor");
-      });
+      }));
       return true;
     } catch (cause) {
       setAddPatientError(
@@ -433,39 +445,33 @@ export default function PatientHomeScreen() {
               </Card>
 
               {upcomingVisit ? (
-                <VisitCard
-                  address={upcomingVisit.address}
-                  beneficiaryName={upcomingVisit.beneficiaryName}
-                  dbStatus={upcomingVisit.dbStatus}
-                  doctorName={upcomingVisit.doctorName}
-                  room={upcomingVisit.room}
-                  startsAt={upcomingVisit.startsAt}
-                  status="upcoming"
-                  telehealthJoinLabel={
-                    upcomingVisit.type === "telehealth" &&
-                    upcomingVisit.dbStatus === "confirmed" &&
-                    upcomingVisit.videoUrl
-                      ? (() => {
-                          const join = telehealthJoinState(
-                            upcomingVisit.startsAt,
-                            upcomingVisit.endsAt,
-                          );
-                          return join.showJoin ? join.label : undefined;
-                        })()
-                      : undefined
-                  }
-                  type={upcomingVisit.type}
-                  onJoinTelehealth={() => {
-                    const url = upcomingVisit.videoUrl;
-                    if (!url) {
-                      AccessibilityInfo.announceForAccessibility(
-                        "Telehealth link is not ready yet.",
-                      );
-                      return;
+                <View className="gap-3">
+                  <VisitCard
+                    beneficiaryName={upcomingVisit.beneficiaryName}
+                    dbStatus={upcomingVisit.dbStatus}
+                    doctorName={upcomingVisit.doctorName}
+                    endsAt={upcomingVisit.endsAt}
+                    progress={upcomingVisit.visit}
+                    room={upcomingVisit.room}
+                    sessionCancelled={upcomingVisit.visit.sessionCancelled}
+                    startsAt={upcomingVisit.startsAt}
+                    status="upcoming"
+                    onPress={() =>
+                      router.push({ pathname: "/visit/[id]", params: { id: upcomingVisit.visit.id } })
                     }
-                    void Linking.openURL(url);
-                  }}
-                />
+                  />
+                  <QueueStatusCard
+                    compact
+                    room={upcomingVisit.room}
+                    visit={upcomingVisit.visit}
+                    onCheckIn={() => setCheckInOpen(true)}
+                  />
+                  {homeMessage ? (
+                    <Text accessibilityLiveRegion="polite" className="px-1 text-sm text-primary">
+                      {homeMessage}
+                    </Text>
+                  ) : null}
+                </View>
               ) : (
                 <EmptyState message="No upcoming visits yet." title="Upcoming" />
               )}
@@ -488,11 +494,10 @@ export default function PatientHomeScreen() {
               bookingBeneficiary?.relationship === "self" ? (
                 <View className="gap-2">
                   <Text className="text-sm text-ink-muted">
-                    With {returningLine.doctorName} ·{" "}
-                    {returningLine.appointmentType.replace("-", " ")}
+                    Book again with {returningLine.doctorName}
                   </Text>
                   <Pressable
-                    accessibilityLabel="Change doctor or visit type"
+                    accessibilityLabel="Choose a different doctor"
                     accessibilityRole="button"
                     className="min-h-11 justify-center web:hover:opacity-80"
                     onPress={() => {
@@ -504,7 +509,7 @@ export default function PatientHomeScreen() {
                     }}
                   >
                     <Text className="text-sm font-semibold text-primary">
-                      Change doctor or visit type
+                      Choose a different doctor
                     </Text>
                   </Pressable>
                 </View>
@@ -512,7 +517,7 @@ export default function PatientHomeScreen() {
             </View>
           </View>
 
-          <HospitalFooter />
+          {userId ? <RecentUpdatesCard userId={userId} /> : null}
         </ScrollView>
       )}
 
@@ -539,13 +544,13 @@ export default function PatientHomeScreen() {
               className="min-h-12 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
               onPress={() => {
                 setBeneficiarySheetOpen(false);
-                setSetupSelfOpen(true);
+                afterSheetCloses(() => setSetupSelfOpen(true));
               }}
             >
               <Text className="font-semibold text-primary">Book for myself</Text>
             </Pressable>
           )}
-          {beneficiaries
+          {activeBeneficiaries
             .filter((beneficiary) => beneficiary.relationship !== "self")
             .map((beneficiary) => (
               <BeneficiaryPill
@@ -565,13 +570,24 @@ export default function PatientHomeScreen() {
             className="min-h-12 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
             onPress={() => {
               setBeneficiarySheetOpen(false);
-              setAddPatientOpen(true);
+              afterSheetCloses(() => setAddPatientOpen(true));
             }}
           >
             <Text className="font-semibold text-primary">Add new patient</Text>
           </Pressable>
         </View>
       </Sheet>
+
+      {checkInOpen && upcomingVisit ? (
+        <CheckInSheet
+          key={upcomingVisit.visit.id}
+          appointmentId={upcomingVisit.visit.id}
+          doctorName={upcomingVisit.doctorName}
+          patientName={upcomingVisit.beneficiaryName}
+          onCheckedIn={({ queueNumber }) => setHomeMessage(`Checked in. Your number is ${queueNumber}.`)}
+          onOpenChange={setCheckInOpen}
+        />
+      ) : null}
 
       <AddBeneficiarySheet
         errorMessage={addPatientError}

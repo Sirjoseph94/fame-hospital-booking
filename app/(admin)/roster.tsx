@@ -15,8 +15,11 @@ import { FieldError } from "@/components/ui/field-error";
 import { FormTextInput } from "@/components/ui/form-text-input";
 import { confirmAsync } from "@/lib/confirm";
 import { copyText } from "@/lib/copy-text";
-import { InviteError, type DoctorInvite } from "@/lib/services/invites";
-import { bufferMinutesSchema } from "@/lib/validation/forms";
+import {
+  effectiveInviteStatus,
+  InviteError,
+  type DoctorInvite,
+} from "@/lib/services/invites";
 import { doctorInviteFormSchema } from "@/lib/validation/invites";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
@@ -26,16 +29,13 @@ import {
   VisitListSkeleton,
 } from "@/components/ui/skeleton";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
+import { formatSessionWhen, placesLeftLabel } from "@/lib/session-groups";
 import { useDoctorRoster, useSetAccountActive } from "@/lib/queries/doctors";
 import {
   useCreateDoctorInvite,
   useDoctorInvites,
   useRevokeDoctorInvite,
 } from "@/lib/queries/invites";
-import {
-  useSchedulingSettings,
-  useUpdateBufferMinutes,
-} from "@/lib/queries/settings";
 import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { AccountError } from "@/lib/services/accounts";
@@ -50,27 +50,21 @@ function loadErrorMessage(cause: unknown): string {
 
 export default function AdminRosterScreen() {
   const rosterQuery = useDoctorRoster();
-  const settingsQuery = useSchedulingSettings();
   const invitesQuery = useDoctorInvites();
   useRefreshOnFocus([
     queryKeys.doctors.roster,
-    queryKeys.settings,
     queryKeys.invites,
   ]);
 
   const setAccountActive = useSetAccountActive();
-  const updateBufferMinutes = useUpdateBufferMinutes();
   const createDoctorInvite = useCreateDoctorInvite();
   const revokeDoctorInvite = useRevokeDoctorInvite();
 
   const [userRefreshing, setUserRefreshing] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  // What the admin has typed; null shows the saved value.
-  const [bufferDraft, setBufferDraft] = useState<string | null>(null);
-  const [bufferMessage, setBufferMessage] = useState<string | null>(null);
-  const [bufferError, setBufferError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteSpecialty, setInviteSpecialty] = useState("");
+  const [inviteDepartment, setInviteDepartment] = useState("");
   const [inviteBio, setInviteBio] = useState("");
   const [inviteFee, setInviteFee] = useState("");
   const [inviteYears, setInviteYears] = useState("");
@@ -90,10 +84,10 @@ export default function AdminRosterScreen() {
   );
 
   const doctors = rosterQuery.data ?? [];
-  const invites = invitesQuery.data ?? [];
-  const bufferMinutes =
-    bufferDraft ?? String(settingsQuery.data?.bufferMinutes ?? 15);
-  const savingBuffer = updateBufferMinutes.isPending;
+  const allInvites = invitesQuery.data ?? [];
+  const invites = allInvites.filter((invite) => effectiveInviteStatus(invite) === "pending");
+  const inviteHistory = allInvites.filter((invite) => effectiveInviteStatus(invite) !== "pending");
+  const [showInviteHistory, setShowInviteHistory] = useState(false);
   const creatingInvite = createDoctorInvite.isPending;
   const revokingInviteId = revokeDoctorInvite.isPending
     ? revokeDoctorInvite.variables
@@ -102,7 +96,7 @@ export default function AdminRosterScreen() {
     ? setAccountActive.variables.userId
     : null;
 
-  const queries = [rosterQuery, settingsQuery, invitesQuery];
+  const queries = [rosterQuery, invitesQuery];
   const isPending = queries.some((query) => query.isPending);
   // Nothing to show yet: a failed first load replaces the screen.
   const blockingError = queries.find((query) => query.isError && !query.data)?.error;
@@ -111,8 +105,6 @@ export default function AdminRosterScreen() {
 
   const refresh = async () => {
     setUserRefreshing(true);
-    // Pull-to-refresh shows the saved buffer again, as before.
-    setBufferDraft(null);
     try {
       await Promise.all(queries.map((query) => query.refetch()));
     } finally {
@@ -128,38 +120,11 @@ export default function AdminRosterScreen() {
     }
   };
 
-  const saveBuffer = async () => {
-    const parsedNumber = Number.parseInt(bufferMinutes, 10);
-    const validated = bufferMinutesSchema.safeParse(parsedNumber);
-    if (!validated.success) {
-      setBufferError(
-        validated.error.issues[0]?.message ??
-          "Enter a whole number of minutes (0 or more).",
-      );
-      return;
-    }
-    const parsed = validated.data;
-
-    setBufferError(null);
-    setBufferMessage(null);
-    try {
-      await updateBufferMinutes.mutateAsync(parsed);
-      // The cache now holds the saved value; show it.
-      setBufferDraft(null);
-      setBufferMessage("Buffer updated for all doctors.");
-    } catch (cause) {
-      setBufferError(
-        cause instanceof SchedulingError
-          ? cause.message
-          : "Could not update buffer.",
-      );
-    }
-  };
-
   const createInvite = async () => {
     const parsed = doctorInviteFormSchema.safeParse({
       email: inviteEmail,
       specialty: inviteSpecialty,
+      department: inviteDepartment || undefined,
       bio: inviteBio || undefined,
       consultationFee: inviteFee || undefined,
       yearsExperience: inviteYears || undefined,
@@ -185,6 +150,7 @@ export default function AdminRosterScreen() {
       const invite = await createDoctorInvite.mutateAsync({
         email: parsed.data.email,
         specialty: parsed.data.specialty,
+        department: parsed.data.department,
         bio: parsed.data.bio,
         consultationFee: fee,
         yearsExperience: years,
@@ -192,6 +158,7 @@ export default function AdminRosterScreen() {
       });
       setInviteEmail("");
       setInviteSpecialty("");
+      setInviteDepartment("");
       setInviteBio("");
       setInviteFee("");
       setInviteYears("");
@@ -301,52 +268,14 @@ export default function AdminRosterScreen() {
           />
 
           <Card style={{ gap: 12 }}>
-            <Text className="text-base font-semibold text-ink">
-              Post-visit buffer
-            </Text>
-            <Text className="text-sm text-ink-muted">
-              Minutes blocked after each booked visit before the next slot can be
-              booked. Doctors see this on their agenda; patients see it on the slot
-              grid.
-            </Text>
-            <Text className="text-sm font-medium text-ink">Buffer (minutes)</Text>
-            <FormTextInput
-              accessibilityLabel="Buffer minutes"
-              kind="number"
-              onChangeText={setBufferDraft}
-              value={bufferMinutes}
-            />
-            <FieldError message={bufferError ?? undefined} />
-            {bufferMessage ? (
-              <Text accessibilityLiveRegion="polite" className="text-sm text-available">
-                {bufferMessage}
-              </Text>
-            ) : null}
-            <Pressable
-              accessibilityLabel="Save buffer minutes"
-              accessibilityRole="button"
-              accessibilityState={{ disabled: savingBuffer }}
-              className="min-h-12 items-center justify-center rounded-xl bg-primary web:hover:opacity-90"
-              disabled={savingBuffer}
-              onPress={() => void saveBuffer()}
-            >
-              {savingBuffer ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <Text className="font-semibold text-surface">Save buffer</Text>
-              )}
-            </Pressable>
-          </Card>
-
-          <Card style={{ gap: 12 }}>
             <Text className="text-base font-semibold text-ink">Invite doctor</Text>
             <Text className="text-sm text-ink-muted">
-              Create an invite code for a new clinician. Email is for your records
-              only in this pilot—we do not send email or require the account email
-              to match.
+              Create an invite code for a new clinician. The code only works for an
+              account signed in with this email address. We don&apos;t email it; share
+              the code yourself.
             </Text>
             <View className="gap-1">
-              <Text className="text-sm font-medium text-ink">Email (reference)</Text>
+              <Text className="text-sm font-medium text-ink">Doctor&apos;s email</Text>
               <FormTextInput
                 accessibilityLabel="Doctor email for reference"
                 kind="email"
@@ -360,6 +289,15 @@ export default function AdminRosterScreen() {
                 accessibilityLabel="Doctor specialty"
                 onChangeText={setInviteSpecialty}
                 value={inviteSpecialty}
+              />
+            </View>
+            <View className="gap-1">
+              <Text className="text-sm font-medium text-ink">Department (optional)</Text>
+              <FormTextInput
+                accessibilityLabel="Doctor department"
+                onChangeText={setInviteDepartment}
+                placeholder="Outpatients"
+                value={inviteDepartment}
               />
             </View>
             <View className="gap-1">
@@ -475,6 +413,45 @@ export default function AdminRosterScreen() {
                 </Card>
               ))
             )}
+            {inviteHistory.length > 0 ? (
+              <Pressable
+                accessibilityLabel={showInviteHistory ? "Hide invite history" : "Show invite history"}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showInviteHistory }}
+                className="min-h-11 justify-center web:hover:opacity-80"
+                onPress={() => setShowInviteHistory((value) => !value)}
+              >
+                <Text className="text-sm font-semibold text-primary">
+                  {showInviteHistory ? "Hide" : "Show"} invite history ({inviteHistory.length})
+                </Text>
+              </Pressable>
+            ) : null}
+            {showInviteHistory
+              ? inviteHistory.map((invite) => {
+                  const status = effectiveInviteStatus(invite);
+                  return (
+                    <Card key={invite.id} style={{ gap: 4 }}>
+                      <View className="flex-row items-start justify-between gap-3">
+                        <View className="min-w-0 flex-1 gap-1">
+                          <Text className="text-sm font-semibold text-ink" selectable>
+                            {invite.email}
+                          </Text>
+                          <Text className="text-xs text-ink-muted">
+                            {invite.specialty}
+                            {invite.department ? ` · ${invite.department}` : ""} · created{" "}
+                            {format(parseISO(invite.createdAt), "MMM d, yyyy")}
+                          </Text>
+                        </View>
+                        <View className="rounded-full bg-surface-muted px-3 py-1">
+                          <Text className="text-xs font-semibold uppercase text-ink-muted">
+                            {status}
+                          </Text>
+                        </View>
+                      </View>
+                    </Card>
+                  );
+                })
+              : null}
           </View>
 
           <View className="gap-3">
@@ -501,9 +478,9 @@ export default function AdminRosterScreen() {
                         : "Inactive · cannot sign in or receive bookings"}
                     </Text>
                     <Text className="text-xs text-ink-muted" selectable>
-                      Next open slot:{" "}
-                      {doctor.nextAvailable
-                        ? format(parseISO(doctor.nextAvailable), "MMM d · h:mm a")
+                      Next open session:{" "}
+                      {doctor.nextSession
+                        ? `${formatSessionWhen(doctor.nextSession)} · ${placesLeftLabel(doctor.nextSession.placesLeft)}`
                         : "none"}
                     </Text>
                   </View>
@@ -531,7 +508,7 @@ export default function AdminRosterScreen() {
                       )}
                     </Pressable>
                     <Pressable
-                      accessibilityLabel={`Manage schedule for ${doctor.name}`}
+                      accessibilityLabel={`Details and schedule for ${doctor.name}`}
                       accessibilityRole="button"
                       className="min-h-11 flex-1 items-center justify-center rounded-xl border border-primary px-3 web:hover:opacity-90"
                       onPress={() =>
@@ -542,22 +519,7 @@ export default function AdminRosterScreen() {
                       }
                     >
                       <Text className="text-sm font-semibold text-primary">
-                        Schedule
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityLabel={`Set blackout for ${doctor.name}`}
-                      accessibilityRole="button"
-                      className="min-h-11 flex-1 items-center justify-center rounded-xl border border-ink-muted px-3 web:hover:opacity-90"
-                      onPress={() =>
-                        router.push({
-                          pathname: "/doctor/[id]/blackout",
-                          params: { id: doctor.id },
-                        })
-                      }
-                    >
-                      <Text className="text-sm font-semibold text-ink-muted">
-                        Blackout
+                        Details & schedule
                       </Text>
                     </Pressable>
                   </View>

@@ -1,5 +1,10 @@
 # Plan: Enterprise Hospital Schedule & Appointment Management (UI)
 
+> **Historical document.** This plan describes the original one-patient-per-slot
+> booking model (holds, blackouts, post-visit buffers), which was replaced by
+> first-come-first-served clinic sessions and removed in migration 22. For how the
+> app works today see [README.md](README.md) and [docs/RUNBOOK.md](docs/RUNBOOK.md).
+
 Status: **approved** — implementing Step 1 only, then stopping for review.
 
 Build order is **strictly sequential**. After each numbered step: `tsc --noEmit` + lint, report what changed, **stop for review**. Do not batch steps.

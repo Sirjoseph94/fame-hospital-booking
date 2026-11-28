@@ -5,9 +5,10 @@ export const doctorInviteFormSchema = z.object({
   email: z
     .string()
     .trim()
-    .min(1, "Enter the doctor's email for your records.")
+    .min(1, "Enter the doctor's email address.")
     .email("Enter a valid email address."),
   specialty: z.string().trim().min(2, "Enter a specialty."),
+  department: z.string().trim().max(80, "Keep the department under 80 characters.").optional(),
   bio: z.string().trim().optional(),
   consultationFee: z
     .string()
@@ -44,7 +45,6 @@ export const doctorInviteFormSchema = z.object({
     ),
 });
 
-export type DoctorInviteFormFields = z.infer<typeof doctorInviteFormSchema>;
 
 export const doctorClaimCodeSchema = z.object({
   code: z

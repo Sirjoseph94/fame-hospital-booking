@@ -12,7 +12,7 @@ describe("visitStatusLabel", () => {
   it.each(["patient", "doctor", "admin"] as const)(
     "uses shared labels for terminal states (%s)",
     (audience) => {
-      expect(visitStatusLabel("completed", "completed", audience)).toBe("Completed");
+      expect(visitStatusLabel("completed", "completed", audience)).toBe(audience === "patient" ? "Completed" : "Seen");
       expect(visitStatusLabel("cancelled", "cancelled", audience)).toBe("Cancelled");
       expect(visitStatusLabel("upcoming", "confirmed", audience)).toBe("Confirmed");
     },
@@ -35,5 +35,16 @@ describe("visitStatusLabel", () => {
     expect(visitStatusLabel("upcoming", undefined, "patient")).toBe("Upcoming");
     expect(visitStatusLabel("upcoming", undefined, "admin")).toBe("Upcoming");
     expect(visitStatusLabel("upcoming", undefined, "doctor")).toBe("Confirmed");
+  });
+
+  it("words missed visits and queue progress for each audience", () => {
+    expect(visitStatusLabel("missed", "no_show", "patient")).toBe("Missed");
+    expect(visitStatusLabel("missed", "no_show", "doctor")).toBe("No-show");
+    const waiting = { checkedInAt: "2026-11-30T08:00:00Z", queueNumber: 3 };
+    expect(visitStatusLabel("upcoming", "confirmed", "patient", undefined, new Date(), waiting)).toBe("Checked in · #3");
+    expect(visitStatusLabel("upcoming", "confirmed", "doctor", undefined, new Date(), waiting)).toBe("Arrived · #3");
+    const called = { ...waiting, calledAt: "2026-11-30T09:00:00Z" };
+    expect(visitStatusLabel("upcoming", "confirmed", "patient", undefined, new Date(), called)).toBe("Your turn");
+    expect(visitStatusLabel("upcoming", "confirmed", "admin", undefined, new Date(), called)).toBe("With doctor");
   });
 });

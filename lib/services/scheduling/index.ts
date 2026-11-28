@@ -3,11 +3,9 @@
 
 import { appointmentsMethods } from "./appointments";
 import { beneficiariesMethods } from "./beneficiaries";
-import { blackoutsMethods } from "./blackouts";
 import { doctorsMethods } from "./doctors";
 import { setNextFailure } from "./internal";
-import { settingsMethods } from "./settings";
-import { slotsMethods } from "./slots";
+import { sessionsMethods } from "./sessions";
 import type { SchedulingService } from "./types";
 
 export const schedulingService: SchedulingService = {
@@ -15,17 +13,16 @@ export const schedulingService: SchedulingService = {
   injectNextFailure: setNextFailure,
   ...beneficiariesMethods,
   ...doctorsMethods,
-  ...slotsMethods,
+  ...sessionsMethods,
   ...appointmentsMethods,
-  ...blackoutsMethods,
-  ...settingsMethods,
 };
 
 export { SchedulingError, type SchedulingErrorCode } from "./errors";
 export type * from "./types";
 export {
-  appointmentEndsAt,
-  isAppointmentUpcoming,
-  isBeforeNow,
-} from "./appointments";
-export { toDbAppointmentStatus } from "./mappers";
+  visitFlowService,
+  checkInCodeFromScan,
+  normalizeCheckInCode,
+  type CheckInResult,
+  type VisitAction,
+} from "./visit-flow";

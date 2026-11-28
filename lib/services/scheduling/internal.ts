@@ -1,13 +1,10 @@
 // Shared helpers for the scheduling service modules. Not part of the public API.
 
-import { format, parseISO, subDays } from "date-fns";
-
 import { schedulingLatencyMs } from "@/lib/scheduling-constants";
 import { supabase } from "@/lib/supabase";
-import type { SlotHold } from "@/types/scheduling";
 
 import { SchedulingError, type SchedulingErrorCode } from "./errors";
-import type { AppointmentRow, SlotRow } from "./mappers";
+import type { AppointmentRow } from "./mappers";
 
 let nextFailure: SchedulingErrorCode | null = null;
 
@@ -38,8 +35,7 @@ export function consumeFailure(expected?: SchedulingErrorCode): void {
   const code = nextFailure;
   nextFailure = null;
   const messages: Record<SchedulingErrorCode, string> = {
-    SLOT_TAKEN: "That appointment time was just taken.",
-    HOLD_EXPIRED: "Your five-minute slot hold has expired.",
+    SESSION_UNAVAILABLE: "That session is full or no longer available.",
     NETWORK_ERROR: "The scheduling service could not be reached.",
     FORBIDDEN: "You are not allowed to do that.",
     INVALID_REQUEST: "That request is not valid right now.",
@@ -80,91 +76,172 @@ export function asNetworkError(error: unknown): never {
   );
 }
 
-export type SlotRpcPayload = {
+export type SchedulingRpcPayload = {
   success?: boolean;
   code?: string;
-  expires_at?: string;
   appointment_id?: string;
+  created?: number;
+  skipped?: number;
+  removed?: boolean;
+  cancelled_bookings?: number;
+  booked?: number;
+  queue_number?: number;
+  position?: number | null;
+  already?: boolean;
+  entry_id?: string;
+  opens_at?: string;
 };
 
-export function schedulingErrorFromSlotRpc(code: string | undefined): SchedulingError {
-  if (code === "HOLD_EXPIRED") {
-    return new SchedulingError(
-      "HOLD_EXPIRED",
-      "Your five-minute slot hold has expired.",
-    );
+/** "9:30 AM" (today) or "Tue 9:30 AM" for a hospital-local timestamp. */
+function formatOpensAt(value: string | undefined): string | null {
+  if (!value) {
+    return null;
   }
-  if (code === "SLOT_TAKEN" || code === "SLOT_IN_USE") {
-    return new SchedulingError(
-      "SLOT_TAKEN",
-      "That appointment time was just taken.",
-    );
+  // A zone-less "yyyy-MM-ddTHH:mm:ss" is read as local (hospital) time.
+  const date = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) {
+    return null;
   }
-  if (code === "NOT_AUTHENTICATED") {
-    return new SchedulingError(
-      "FORBIDDEN",
-      "You must be signed in to use scheduling.",
-    );
-  }
-  if (code === "FORBIDDEN") {
-    return new SchedulingError(
-      "FORBIDDEN",
-      "You cannot modify this appointment.",
-    );
-  }
-  if (code === "NOT_FOUND") {
-    return new SchedulingError("INVALID_REQUEST", "Appointment not found.");
-  }
-  if (code === "NOT_MODIFIABLE") {
-    return new SchedulingError(
-      "INVALID_REQUEST",
-      "This appointment can no longer be changed.",
-    );
-  }
-  if (code === "WRONG_DOCTOR") {
-    return new SchedulingError(
-      "INVALID_REQUEST",
-      "Reschedule must stay with the same doctor.",
-    );
-  }
-  if (code === "INVALID_INPUT") {
-    return new SchedulingError(
-      "INVALID_REQUEST",
-      "Some booking details are invalid. Check the form and try again.",
-    );
-  }
-  return new SchedulingError(
-    "NETWORK_ERROR",
-    "The scheduling service could not be reached.",
-  );
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return date.toLocaleString(undefined, {
+    weekday: sameDay ? undefined : "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
-export function parseSlotRpcPayload(data: unknown): SlotRpcPayload {
-  if (!data || typeof data !== "object") {
-    return {};
+/** Error for a `{ success: false, code }` response from a scheduling RPC. */
+export function schedulingErrorFromRpc(
+  code: string | undefined,
+  payload: SchedulingRpcPayload = {},
+): SchedulingError {
+  switch (code) {
+    case "WRONG_CODE":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "That isn't the check-in code shown at reception. Check it and try again.",
+      );
+    case "CHECK_IN_NOT_OPEN": {
+      const opens = formatOpensAt(payload.opens_at);
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        opens ? `Check-in opens at ${opens}.` : "Check-in isn't open yet for this session.",
+      );
+    }
+    case "CHECK_IN_CLOSED":
+      return new SchedulingError("INVALID_REQUEST", "This session has ended, so check-in is closed.");
+    case "NOT_ARRIVED":
+      return new SchedulingError("INVALID_REQUEST", "Mark the patient as arrived before calling them in.");
+    case "TOO_EARLY":
+      return new SchedulingError("INVALID_REQUEST", "This can be recorded once the session has started.");
+    case "QUEUE_EMPTY":
+      return new SchedulingError("INVALID_REQUEST", "Nobody is waiting yet.");
+    case "OUTSIDE_BOOKING_WINDOW":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "That session is too far ahead to book yet. Choose an earlier session.",
+      );
+    case "SESSION_HAS_PLACES":
+      return new SchedulingError("INVALID_REQUEST", "This session has places left, so you can book it directly.");
+    case "ALREADY_WAITING":
+      return new SchedulingError("INVALID_REQUEST", "This person is already on the waitlist for that session.");
+    case "WAITLIST_DISABLED":
+      return new SchedulingError("INVALID_REQUEST", "The waitlist isn't available right now.");
+    case "SESSION_FULL":
+      return new SchedulingError(
+        "SESSION_UNAVAILABLE",
+        "That session just filled up. Choose another session.",
+      );
+    case "SESSION_UNAVAILABLE":
+      return new SchedulingError(
+        "SESSION_UNAVAILABLE",
+        "That session is no longer available. Choose another session.",
+      );
+    case "DOCTOR_UNAVAILABLE":
+      return new SchedulingError(
+        "SESSION_UNAVAILABLE",
+        "This doctor isn't taking new bookings right now.",
+      );
+    case "ALREADY_BOOKED":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "This person is already booked into that session.",
+      );
+    case "NOT_AUTHENTICATED":
+      return new SchedulingError(
+        "FORBIDDEN",
+        "You must be signed in to use scheduling.",
+      );
+    case "FORBIDDEN":
+      return new SchedulingError("FORBIDDEN", "You are not allowed to do that.");
+    case "NOT_FOUND":
+      return new SchedulingError("INVALID_REQUEST", "That booking or session no longer exists.");
+    case "NOT_MODIFIABLE":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "This can no longer be changed.",
+      );
+    case "WRONG_DOCTOR":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "A booking can only move to another session with the same doctor.",
+      );
+    case "CAPACITY_BELOW_BOOKED":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "The patient limit can't be lower than the number of patients already booked.",
+      );
+    case "CANNOT_REMOVE_SELF":
+      return new SchedulingError("INVALID_REQUEST", "You can't remove yourself.");
+    case "HAS_UPCOMING_VISITS":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "This person has upcoming visits. Cancel them first, then remove them.",
+      );
+    case "BENEFICIARY_REMOVED":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "This person was removed from your family members.",
+      );
+    case "INVALID_INPUT":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "Some details are invalid. Check the form and try again.",
+      );
+    default:
+      return new SchedulingError(
+        "NETWORK_ERROR",
+        "The scheduling service could not be reached.",
+      );
   }
-  return data as SlotRpcPayload;
 }
 
-export async function invokeSlotRpc(
+export async function invokeSchedulingRpc(
   fn:
-    | "cleanup_expired_slot_holds"
-    | "hold_slot_if_available"
-    | "release_slot_hold"
-    | "book_held_slot"
-    | "free_orphan_booked_slot"
-    | "book_appointment_from_hold"
-    | "reschedule_appointment"
-    | "cancel_appointment",
+    | "book_session"
+    | "move_session_booking"
+    | "cancel_appointment"
+    | "create_clinic_sessions"
+    | "update_clinic_session"
+    | "cancel_clinic_session"
+    | "remove_beneficiary"
+    | "check_in_visit"
+    | "advance_visit"
+    | "call_next_in_queue"
+    | "get_queue_status"
+    | "book_follow_up"
+    | "join_waitlist"
+    | "leave_waitlist",
   args: Record<string, unknown> = {},
-): Promise<SlotRpcPayload> {
+): Promise<SchedulingRpcPayload> {
   const { data, error } = await supabase.rpc(fn, args);
   if (error) {
     asNetworkError(error);
   }
-  const payload = parseSlotRpcPayload(data);
+  const payload =
+    data && typeof data === "object" ? (data as SchedulingRpcPayload) : {};
   if (payload.success === false) {
-    throw schedulingErrorFromSlotRpc(payload.code);
+    throw schedulingErrorFromRpc(payload.code, payload);
   }
   return payload;
 }
@@ -218,89 +295,9 @@ export function normalizeTimeForDb(timeHm: string): string {
   return timeHm.length === 5 ? `${timeHm}:00` : timeHm;
 }
 
-export async function cleanupExpiredHolds(): Promise<void> {
-  try {
-    await invokeSlotRpc("cleanup_expired_slot_holds");
-  } catch {
-    // Best-effort; listing slots should still proceed.
-  }
-}
-
-export async function fetchBufferMinutes(): Promise<number> {
-  const { data, error } = await supabase
-    .from("hospital_settings")
-    .select("buffer_minutes")
-    .eq("id", 1)
-    .maybeSingle();
-
-  if (error || !data) {
-    return 15;
-  }
-  return Math.max(0, data.buffer_minutes as number);
-}
-
-/** "yyyy-MM-dd" for the day before `ymd`. */
-export function previousYmd(ymd: string): string {
-  return format(subDays(parseISO(ymd), 1), "yyyy-MM-dd");
-}
-
-/**
- * End times of booked slots per doctor, for applying the post-visit buffer.
- * Bounded by date: pass the day *before* the first day you're listing as
- * `fromYmd`, since a late booking can push its buffer past midnight.
- */
-export async function bookedEndsByDoctor(
-  doctorIds: string[],
-  fromYmd: string,
-  toYmd?: string,
-): Promise<Map<string, string[]>> {
-  const byDoctor = new Map<string, string[]>();
-  if (doctorIds.length === 0) {
-    return byDoctor;
-  }
-
-  let query = supabase
-    .from("appointment_slots")
-    .select("doctor_id, slot_date, end_time")
-    .in("doctor_id", doctorIds)
-    .eq("status", "booked")
-    .gte("slot_date", fromYmd);
-  if (toYmd) {
-    query = query.lte("slot_date", toYmd);
-  }
-  const { data, error } = await query;
-
-  if (error || !data) {
-    return byDoctor;
-  }
-
-  (data as Pick<SlotRow, "doctor_id" | "slot_date" | "end_time">[]).forEach((row) => {
-    const endTime =
-      row.end_time.length === 5 ? `${row.end_time}:00` : row.end_time;
-    const ends = byDoctor.get(row.doctor_id) ?? [];
-    ends.push(parseISO(`${row.slot_date}T${endTime}`).toISOString());
-    byDoctor.set(row.doctor_id, ends);
-  });
-  return byDoctor;
-}
-
-export async function bookedEndsForDoctor(
-  doctorId: string,
-  fromYmd: string,
-  toYmd?: string,
-): Promise<string[]> {
-  return (await bookedEndsByDoctor([doctorId], fromYmd, toYmd)).get(doctorId) ?? [];
-}
-
-/** Postgres / PostgREST often round-trip timestamptz without ms or with +00:00 vs Z. */
-export function holdExpiryMs(iso: string): number {
-  const ms = new Date(iso).getTime();
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-export function holdExpiryMatches(clientIso: string, serverIso: string): boolean {
-  return Math.abs(holdExpiryMs(clientIso) - holdExpiryMs(serverIso)) <= 2000;
-}
+/** Columns every appointment query selects (the session gives the visit window). */
+export const APPOINTMENT_SELECT =
+  "*, session:clinic_sessions(session_date, start_time, end_time, room, status, cancel_reason)";
 
 export type AppointmentManager = "doctor" | "patient";
 
@@ -309,7 +306,7 @@ export async function fetchAppointmentRow(
 ): Promise<AppointmentRow> {
   const { data, error } = await supabase
     .from("appointments")
-    .select("*, appointment_slots(slot_date, start_time, end_time)")
+    .select(APPOINTMENT_SELECT)
     .eq("id", appointmentId)
     .maybeSingle();
 
@@ -341,15 +338,6 @@ export function appointmentManager(
   return null;
 }
 
-export function appointmentVisitDateYmd(row: AppointmentRow): string {
-  const slot = row.appointment_slots;
-  const slotRow = Array.isArray(slot) ? slot[0] : slot;
-  if (slotRow?.slot_date) {
-    return slotRow.slot_date as string;
-  }
-  return row.appointment_date;
-}
-
 export function assertCanManageAppointment(
   row: AppointmentRow,
   userId: string,
@@ -368,51 +356,4 @@ export function assertCanManageAppointment(
     );
   }
   return manager;
-}
-
-export function assertValidHold(
-  slotId: string,
-  hold: SlotHold,
-  activeHold: SlotHold | null,
-  heldByUserId?: string | null,
-  currentUserId?: string,
-): void {
-  consumeFailure("HOLD_EXPIRED");
-
-  if (
-    !activeHold ||
-    activeHold.slotId !== slotId ||
-    hold.slotId !== slotId
-  ) {
-    throw new SchedulingError(
-      "HOLD_EXPIRED",
-      "Your five-minute slot hold has expired.",
-    );
-  }
-
-  if (
-    currentUserId &&
-    heldByUserId &&
-    heldByUserId !== currentUserId
-  ) {
-    throw new SchedulingError(
-      "SLOT_TAKEN",
-      "That appointment time was just taken.",
-    );
-  }
-
-  const serverExpiresMs = holdExpiryMs(activeHold.expiresAt);
-  if (serverExpiresMs <= Date.now()) {
-    throw new SchedulingError(
-      "HOLD_EXPIRED",
-      "Your five-minute slot hold has expired.",
-    );
-  }
-
-  if (!holdExpiryMatches(hold.expiresAt, activeHold.expiresAt)) {
-    throw new SchedulingError(
-      "HOLD_EXPIRED",
-      "Your five-minute slot hold has expired.",
-    );
-  }
 }

@@ -15,6 +15,8 @@ export const queryKeys = {
       ["appointments", "doctor", doctorId, fromYmd, toYmd] as const,
     admin: (filter: AppointmentListFilter) =>
       ["appointments", "admin", filter] as const,
+    patientSummary: (appointmentId: string) =>
+      ["appointments", "patient-summary", appointmentId] as const,
   },
   doctors: {
     all: ["doctors"] as const,
@@ -22,15 +24,13 @@ export const queryKeys = {
     roster: ["doctors", "roster"] as const,
     detail: (doctorId: string) => ["doctors", "detail", doctorId] as const,
   },
-  slots: {
-    all: ["slots"] as const,
-    bookable: (doctorId: string) => ["slots", "bookable", doctorId] as const,
-    scheduleDay: (doctorId: string, dateYmd: string) =>
-      ["slots", "schedule", doctorId, dateYmd] as const,
-    capacityDay: (dateYmd: string) => ["slots", "capacity", dateYmd] as const,
+  sessions: {
+    all: ["sessions"] as const,
+    bookable: (doctorId: string) => ["sessions", "bookable", doctorId] as const,
+    doctorRange: (doctorId: string, fromYmd: string, toYmd: string) =>
+      ["sessions", "doctor", doctorId, fromYmd, toYmd] as const,
+    day: (dateYmd: string) => ["sessions", "day", dateYmd] as const,
   },
-  blackouts: (doctorId: string) => ["blackouts", doctorId] as const,
-  settings: ["settings"] as const,
   profile: {
     patient: (userId: string) => ["profile", "patient", userId] as const,
     doctor: (userId: string) => ["profile", "doctor", userId] as const,
@@ -38,16 +38,39 @@ export const queryKeys = {
   notificationPreferences: (userId: string) =>
     ["notification-preferences", userId] as const,
   invites: ["invites"] as const,
+  auditLog: ["audit-log"] as const,
+  failedDeliveries: ["failed-deliveries"] as const,
+  patients: {
+    all: ["patients"] as const,
+    search: (term: string) => ["patients", "search", term] as const,
+    detail: (patientId: string) => ["patients", "detail", patientId] as const,
+  },
+  hospitalSettings: ["hospital-settings"] as const,
+  hospitalInfo: ["hospital-info"] as const,
+  checkInCode: ["check-in-code"] as const,
+  queueStatus: (appointmentId: string) => ["appointments", "queue", appointmentId] as const,
+  sessionProgress: (dateYmd: string) => ["sessions", "progress", dateYmd] as const,
+  waitlist: {
+    all: ["waitlist"] as const,
+    mine: (userId: string) => ["waitlist", "mine", userId] as const,
+  },
+  reports: (fromYmd: string, toYmd: string) => ["reports", fromYmd, toYmd] as const,
+  updatesAll: ["updates"] as const,
+  updates: (userId: string) => ["updates", userId] as const,
 };
 
 /**
- * After anything that changes bookings or availability: appointments, slots
- * and doctors' next-available times can all be affected.
+ * After anything that changes bookings or sessions: appointments, session
+ * places and doctors' next open session can all be affected.
  */
 export function invalidateScheduling(queryClient: QueryClient): Promise<void> {
   return Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.appointments.all }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.slots.all }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all }),
     queryClient.invalidateQueries({ queryKey: queryKeys.doctors.all }),
+    // Booking changes send messages, which show up as updates.
+    queryClient.invalidateQueries({ queryKey: queryKeys.updatesAll }),
+    // A freed place can book someone off a waitlist.
+    queryClient.invalidateQueries({ queryKey: queryKeys.waitlist.all }),
   ]).then(() => undefined);
 }

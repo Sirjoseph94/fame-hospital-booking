@@ -6,7 +6,7 @@ import { RoleGuard } from "@/components/role-guard";
 export default function PatientLayout() {
   return (
     <RoleGuard role="patient">
-      <Tabs screenOptions={{ headerShown: false }}>
+      <Tabs backBehavior="history" screenOptions={{ headerShown: false }}>
         <Tabs.Screen
           name="index"
           options={{
@@ -34,7 +34,9 @@ export default function PatientLayout() {
             ),
           }}
         />
-        <Tabs.Screen name="book" options={{ href: null }} />
+        {/* Reset when left, so "back" never shows an older visit or booking step. */}
+        <Tabs.Screen name="book" options={{ href: null, popToTopOnBlur: true }} />
+        <Tabs.Screen name="visit" options={{ href: null, popToTopOnBlur: true }} />
       </Tabs>
     </RoleGuard>
   );

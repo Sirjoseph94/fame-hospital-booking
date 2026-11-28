@@ -8,33 +8,39 @@ import {
   View,
 } from "react-native";
 import { Stack, router } from "expo-router";
-import { format, parseISO } from "date-fns";
-import QRCode from "react-native-qrcode-svg";
+import { differenceInMinutes, parseISO } from "date-fns";
 
 import { Card } from "@/components/ui/card";
-import { useConfirmBooking } from "@/lib/queries/appointments";
-import { useBeneficiaries } from "@/lib/queries/beneficiaries";
-import { exportAppointmentToCalendar } from "@/lib/services/calendarExport";
-import { useBookingStore } from "@/lib/stores/booking";
-import { useSessionStore } from "@/lib/stores/session";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
+import { useBookSession } from "@/lib/queries/appointments";
+import { useBeneficiaries } from "@/lib/queries/beneficiaries";
+import { useHospitalInfo } from "@/lib/queries/hospital-info";
+import { exportAppointmentToCalendar } from "@/lib/services/calendarExport";
 import {
   SchedulingError,
   type SchedulingErrorCode,
 } from "@/lib/services/scheduling";
-import type { Appointment } from "@/types/scheduling";
+import { formatSessionWhen } from "@/lib/session-groups";
+import { useBookingStore } from "@/lib/stores/booking";
+import { useSessionStore } from "@/lib/stores/session";
 import { colors } from "@/lib/theme-colors";
+import type { Appointment } from "@/types/scheduling";
+
+const ARRIVAL_NOTE =
+  "Patients are seen in order of arrival during the session. When you arrive, check in with the app by scanning the code at reception.";
 
 export default function BookConfirmationScreen() {
   const session = useSessionStore((state) => state.session);
+  const { data: hospitalInfo } = useHospitalInfo();
   const draft = useBookingStore();
   const resetBookingDraft = useBookingStore((state) => state.resetBookingDraft);
+  const setDraftSession = useBookingStore((state) => state.setSession);
 
-  const confirmBooking = useConfirmBooking();
-  const submitting = confirmBooking.isPending;
+  const bookSession = useBookSession();
+  const submitting = bookSession.isPending;
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<SchedulingErrorCode | null>(null);
-  const [confirmed, setConfirmed] = useState<Appointment | null>(null);
+  const [booked, setBooked] = useState<Appointment | null>(null);
   const [calendarMessage, setCalendarMessage] = useState<string | null>(null);
   const beneficiariesQuery = useBeneficiaries(
     draft.beneficiaryId ? session?.userId : undefined,
@@ -43,111 +49,112 @@ export default function BookConfirmationScreen() {
     beneficiariesQuery.data?.find((row) => row.id === draft.beneficiaryId)
       ?.displayName ?? null;
 
+  const incomplete = !draft.session || !draft.doctorId || !draft.beneficiaryId;
   useEffect(() => {
-    if (!draft.slotId || !draft.hold || !draft.doctorId || !draft.beneficiaryId) {
+    if (incomplete && !booked) {
       const task = setTimeout(() => router.replace("/"), 0);
       return () => clearTimeout(task);
     }
-  }, [draft.beneficiaryId, draft.doctorId, draft.hold, draft.slotId]);
+  }, [booked, incomplete]);
 
-  const confirm = async () => {
-    if (
-      !session ||
-      !draft.beneficiaryId ||
-      !draft.doctorId ||
-      !draft.slotId ||
-      !draft.hold
-    ) {
+  const book = async () => {
+    if (!session || !draft.beneficiaryId || !draft.session) {
       setError("Booking details are incomplete. Start again from Home.");
       return;
     }
-
-    if (confirmBooking.isPending) {
+    if (bookSession.isPending) {
       return;
     }
     setError(null);
     setErrorCode(null);
     try {
-      const appointment = await confirmBooking.mutateAsync({
+      const appointment = await bookSession.mutateAsync({
         accountHolderId: session.userId,
         beneficiaryId: draft.beneficiaryId,
-        doctorId: draft.doctorId,
-        slotId: draft.slotId,
-        type: draft.appointmentType,
-        hold: draft.hold,
+        sessionId: draft.session.id,
         reason: draft.reason,
         notes: draft.notes,
-        address:
-          draft.appointmentType === "home-visit"
-            ? draft.visitAddress
-            : undefined,
       });
-      setConfirmed(appointment);
-      AccessibilityInfo.announceForAccessibility("Booking submitted.");
+      setBooked(appointment);
+      AccessibilityInfo.announceForAccessibility("You're booked.");
     } catch (cause) {
       const message =
         cause instanceof SchedulingError
           ? cause.message
-          : "Could not confirm the appointment.";
+          : "Could not book the session.";
       setError(message);
       setErrorCode(cause instanceof SchedulingError ? cause.code : null);
       AccessibilityInfo.announceForAccessibility(message);
     }
   };
 
+  const visitWindow = booked?.startsAt && booked.endsAt
+    ? { startsAt: booked.startsAt, endsAt: booked.endsAt }
+    : draft.session;
+
   const addToCalendar = async () => {
-    if (!confirmed?.startsAt && !draft.slotStartsAt) {
+    if (!booked || !visitWindow) {
       return;
     }
     const result = await exportAppointmentToCalendar({
-      appointmentId: confirmed?.id ?? "",
-      title: `Visit with ${draft.doctorName ?? "your doctor"}`,
-      startsAt: confirmed?.startsAt ?? draft.slotStartsAt ?? new Date().toISOString(),
-      durationMin: 30,
-      type: confirmed?.type ?? draft.appointmentType,
-      room: confirmed?.room,
+      appointmentId: booked.id,
+      title: `Clinic with ${draft.doctorName ?? "your doctor"}`,
+      startsAt: visitWindow.startsAt,
+      durationMin: Math.max(
+        differenceInMinutes(parseISO(visitWindow.endsAt), parseISO(visitWindow.startsAt)),
+        15,
+      ),
+      type: booked.type,
+      room: booked.room,
+      note: ARRIVAL_NOTE,
+      hospitalName: hospitalInfo?.name,
+      hospitalAddress: hospitalInfo?.address,
     });
-    if (result.ok) {
-      setCalendarMessage("Added to your calendar.");
-    } else {
-      setCalendarMessage(result.message);
-    }
+    setCalendarMessage(result.ok ? "Added to your calendar." : result.message);
     AccessibilityInfo.announceForAccessibility(
       result.ok ? "Added to calendar." : result.message,
     );
   };
 
-  if (confirmed) {
+  if (booked) {
     return (
       <>
-        <Stack.Screen options={{ title: "Confirmed" }} />
+        <Stack.Screen options={{ title: "Booked" }} />
         <ScrollView
           className="flex-1 bg-surface-muted"
           contentContainerClassName="items-center gap-4 px-4 py-6"
           contentInsetAdjustmentBehavior="automatic"
         >
-          <Card style={{ gap: 12, alignItems: "center", width: "100%" }}>
-            <Text className="text-lg font-semibold text-ink">
-              Booking submitted
+          <Card style={{ gap: 12, width: "100%" }}>
+            <Text accessibilityRole="header" className="text-lg font-semibold text-ink">
+              You&apos;re booked
             </Text>
-            <Text className="text-center text-sm text-ink-muted">
-              Your doctor will confirm the visit. Check My Visits for updates.
-            </Text>
-            {beneficiaryName ? (
-              <Text className="text-sm text-ink" selectable>
-                Patient: {beneficiaryName}
+            <View className="gap-1">
+              <Text className="text-base text-ink" selectable>
+                {draft.doctorName}
               </Text>
-            ) : null}
-            <View
-              accessibilityLabel={`Check-in QR code for appointment ${confirmed.id}`}
-            >
-              <QRCode size={160} value={confirmed.id} />
+              {visitWindow ? (
+                <Text className="text-base font-semibold text-ink" selectable>
+                  {formatSessionWhen(visitWindow)}
+                </Text>
+              ) : null}
+              {booked.room ? (
+                <Text className="text-sm text-ink" selectable>
+                  {/^\d/.test(booked.room) ? `Room ${booked.room}` : booked.room}
+                </Text>
+              ) : null}
+              {beneficiaryName ? (
+                <Text className="text-sm text-ink-muted" selectable>
+                  Patient: {beneficiaryName}
+                </Text>
+              ) : null}
             </View>
-            <Text className="text-sm text-ink-muted" selectable>
-              Appointment ID: {confirmed.id}
+            <Text className="text-sm leading-5 text-ink">{ARRIVAL_NOTE}</Text>
+            <Text className="text-xs text-ink-muted" selectable>
+              Booking reference: {booked.id.slice(0, 8).toUpperCase()}
             </Text>
             <Pressable
-              accessibilityLabel="Add appointment to calendar"
+              accessibilityLabel="Add to calendar"
               accessibilityRole="button"
               className="min-h-12 w-full items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
               onPress={() => void addToCalendar()}
@@ -159,6 +166,17 @@ export default function BookConfirmationScreen() {
                 {calendarMessage}
               </Text>
             ) : null}
+            <Pressable
+              accessibilityLabel="View this visit"
+              accessibilityRole="button"
+              className="min-h-12 w-full items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
+              onPress={() => {
+                resetBookingDraft();
+                router.replace({ pathname: "/visit/[id]", params: { id: booked.id } });
+              }}
+            >
+              <Text className="font-semibold text-primary">View visit</Text>
+            </Pressable>
             <Pressable
               accessibilityLabel="Return to home"
               accessibilityRole="button"
@@ -192,19 +210,15 @@ export default function BookConfirmationScreen() {
             </Text>
           ) : null}
           <Text className="text-sm text-ink-muted">{draft.doctorName}</Text>
-          <Text className="text-base text-ink" selectable>
-            {draft.slotStartsAt
-              ? format(parseISO(draft.slotStartsAt), "EEE, MMM d · h:mm a")
-              : "Selected slot"}
+          <Text className="text-base font-semibold text-ink" selectable>
+            {draft.session ? formatSessionWhen(draft.session) : "Selected session"}
           </Text>
-          <Text className="text-sm capitalize text-ink-muted">
-            {draft.appointmentType.replace("-", " ")}
-          </Text>
-          {draft.appointmentType === "telehealth" ? (
-            <Text className="text-xs text-ink-muted">
-              Your doctor will add a video link when they confirm this visit.
+          {draft.reason.trim() ? (
+            <Text className="text-sm text-ink-muted" selectable>
+              Reason: {draft.reason.trim()}
             </Text>
           ) : null}
+          <Text className="text-sm leading-5 text-ink-muted">{ARRIVAL_NOTE}</Text>
         </Card>
 
         {error ? (
@@ -212,25 +226,26 @@ export default function BookConfirmationScreen() {
             compact
             code={errorCode ?? undefined}
             message={error}
-            onRepick={() => router.replace("/book/slot")}
-            onRetry={
-              errorCode === "NETWORK_ERROR" ? () => void confirm() : undefined
-            }
+            onRepick={() => {
+              setDraftSession(null);
+              router.replace("/book/session");
+            }}
+            onRetry={errorCode === "NETWORK_ERROR" ? () => void book() : undefined}
           />
         ) : null}
 
         <Pressable
-          accessibilityLabel="Confirm appointment"
+          accessibilityLabel="Book this session"
           accessibilityRole="button"
           accessibilityState={{ busy: submitting, disabled: submitting }}
           className="min-h-12 items-center justify-center rounded-xl bg-primary px-4 web:hover:opacity-90"
           disabled={submitting}
-          onPress={() => void confirm()}
+          onPress={() => void book()}
         >
           {submitting ? (
             <ActivityIndicator color={colors.surface} />
           ) : (
-            <Text className="text-base font-semibold text-surface">Confirm</Text>
+            <Text className="text-base font-semibold text-surface">Book</Text>
           )}
         </Pressable>
       </ScrollView>

@@ -1,4 +1,4 @@
-import { hospitalInfo } from "@/lib/hospital-info";
+import { contactSentence, type HospitalInfo } from "@/lib/hospital-info";
 import type { LegalDocument } from "@/lib/legal/types";
 
 // Keep this in step with what the app actually collects: profile fields
@@ -6,9 +6,11 @@ import type { LegalDocument } from "@/lib/legal/types";
 // processors in supabase/functions/dispatch-notifications. If you add a data
 // field, a third-party service or analytics, update this page and its date.
 
-export const privacyPolicy: LegalDocument = {
+/** Built from the admin-managed hospital details (hospital_info). */
+export function buildPrivacyPolicy(hospitalInfo: HospitalInfo): LegalDocument {
+  return {
   title: "Privacy Policy",
-  lastUpdated: "November 27, 2026",
+  lastUpdated: "November 28, 2026",
   intro: `${hospitalInfo.name} runs the FAME Hospital Booking app on iOS, Android and the web. This policy explains what information the app collects, how it is used, who can see it, and the choices you have.`,
   sections: [
     {
@@ -20,7 +22,7 @@ export const privacyPolicy: LegalDocument = {
             "Profile details you choose to add: phone number, home address, emergency contact name and phone number, and a profile photo.",
             "Health details you choose to add: blood type, allergies, medications, medical conditions and medical notes.",
             "Family members you book for: their name, date of birth, gender and relationship to you.",
-            "Appointments: the doctor, date and time, visit type (in clinic, telehealth or home visit), the address for home visits, and any notes you write for the doctor.",
+            "Bookings: the doctor, the clinic session you booked, and any reason or notes you write for the doctor.",
           ],
         },
       ],
@@ -30,7 +32,8 @@ export const privacyPolicy: LegalDocument = {
       blocks: [
         {
           list: [
-            "Your appointment history, including bookings, reschedules, cancellations and whether a visit took place.",
+            "Your appointment history, including bookings, reschedules, cancellations, waitlist places, and whether a visit took place or was missed.",
+            "On the day of a visit: when you checked in, your place in the queue, and when the doctor called you in and finished.",
             "Your notification preferences and, if you allow push notifications, a device token that lets us send them to your phone.",
             "A record of the notifications we send you (when, by which channel, and whether delivery succeeded).",
             "A log of actions hospital administrators take on accounts and schedules, kept for security and accountability.",
@@ -46,7 +49,9 @@ export const privacyPolicy: LegalDocument = {
           list: [
             "To create and secure your account and let you book, reschedule and cancel appointments.",
             "To let your doctor and hospital staff prepare for and manage your visit.",
-            "To send appointment confirmations and reminders by the channels you have turned on.",
+            "To send appointment confirmations, reminders the day before and on the day, and queue updates (for example \"you're next\") by the channels you have turned on.",
+            "To run the clinic queue in order of arrival and give you a place from a waitlist when one frees up.",
+            "To produce anonymous totals for the hospital, such as attendance, no-show rates and waiting times.",
             "To keep the service working and safe, including investigating misuse.",
             "To meet our legal and medical record-keeping obligations.",
           ],
@@ -61,7 +66,7 @@ export const privacyPolicy: LegalDocument = {
           list: [
             "You can see and edit your own profile, family members and appointments.",
             "A doctor you have an appointment with can see your profile, including any health details you have added, along with the appointment and the details of the person the visit is for.",
-            "Hospital administrators can see accounts, family members and appointments so they can run schedules and help you.",
+            "Hospital administrators can see accounts, family members, appointments and whether our messages to you were delivered, so they can run schedules and help you.",
           ],
         },
         "We use these service providers to run the app. They process information only on our behalf:",
@@ -81,6 +86,7 @@ export const privacyPolicy: LegalDocument = {
       blocks: [
         "To keep you signed in, the app stores a session token on your device: in the device's secure storage on iOS and Android, or in your browser's local storage on the web. It also remembers an in-progress booking and a few preferences. Signing out removes your session.",
         "If you add an appointment to your calendar, the app asks for calendar permission and creates that one event. It does not upload or read the contents of your calendar.",
+        "If you check in by scanning the code at reception, the app asks for camera permission and reads only the code. No photos or video are saved or uploaded.",
       ],
     },
     {
@@ -103,7 +109,7 @@ export const privacyPolicy: LegalDocument = {
             "View and update your profile and family members at any time in the app.",
             "Choose which notifications you receive in the app, and turn off push notifications in your device settings.",
             "Delete your account at any time: in the app, open Profile and tap Delete account, or visit the Delete account page on our website (/delete-account).",
-            `Ask for a copy of your information or a correction by contacting us at ${hospitalInfo.email}.`,
+            `Ask for a copy of your information or a correction: ${contactSentence(hospitalInfo)}.`,
           ],
         },
       ],
@@ -123,8 +129,9 @@ export const privacyPolicy: LegalDocument = {
     {
       heading: "Contact us",
       blocks: [
-        `Questions or requests about your privacy: email ${hospitalInfo.email} or call ${hospitalInfo.phone} (${hospitalInfo.hours}).`,
+        `Questions or requests about your privacy: ${contactSentence(hospitalInfo)}.`,
       ],
     },
   ],
 };
+}

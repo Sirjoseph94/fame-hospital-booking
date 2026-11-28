@@ -4,7 +4,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { accountsService } from "@/lib/services/accounts";
 import { schedulingService } from "@/lib/services/scheduling";
 
-/** Active doctors with their next open slot (patient booking, name lookups). */
+/** Active doctors with their next open session (patient booking, name lookups). */
 export function useDoctors() {
   return useQuery({
     queryKey: queryKeys.doctors.list,
@@ -35,6 +35,20 @@ export function useSetDoctorAcceptingBookings(doctorId: string) {
   return useMutation({
     mutationFn: (isAccepting: boolean) =>
       schedulingService.setDoctorAcceptingBookings(doctorId, isAccepting),
+    onSuccess: (detail) => {
+      queryClient.setQueryData(queryKeys.doctors.detail(doctorId), detail);
+    },
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.doctors.all }),
+  });
+}
+
+/** Admin: change a doctor's specialty and department. */
+export function useUpdateDoctorDetails(doctorId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (details: { specialty: string; department: string }) =>
+      schedulingService.updateDoctorDetails(doctorId, details),
     onSuccess: (detail) => {
       queryClient.setQueryData(queryKeys.doctors.detail(doctorId), detail);
     },

@@ -46,13 +46,13 @@ export function VisitListSkeleton({ count = 3 }: { count?: number }) {
   );
 }
 
-export function SlotGridSkeleton() {
+export function SessionListSkeleton({ count = 4 }: { count?: number }) {
   return (
-    <View className="flex-row flex-wrap gap-2">
-      {Array.from({ length: 12 }).map((_, index) => (
+    <View className="gap-2">
+      {Array.from({ length: count }).map((_, index) => (
         <Skeleton
           key={index}
-          className="h-12 w-24 rounded-xl bg-surface-muted"
+          className="h-16 w-full rounded-xl bg-surface-muted"
         />
       ))}
     </View>

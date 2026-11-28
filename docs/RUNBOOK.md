@@ -62,6 +62,18 @@ The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). 
 | 13 | [`20260922000200_doctor_next_available_view.sql`](../supabase/migrations/20260922000200_doctor_next_available_view.sql) | `doctor_next_available_slots` view (one row per doctor, RLS-respecting) + slot index |
 | 14 | [`20260922000300_notification_retry.sql`](../supabase/migrations/20260922000300_notification_retry.sql) | `claimed_at` on `notification_deliveries` for retries / stuck-row recovery (see §12 sweep) |
 | 15 | [`20261127000000_account_deletion.sql`](../supabase/migrations/20261127000000_account_deletion.sql) | `delete_my_account()` RPC: patient self-service deletion (App Store / Google Play). Cancels upcoming visits, releases holds, deletes the auth user (data cascades). **Redeploy `dispatch-notifications`** (§12) with it so doctors' "visit cancelled" messages keep the visit details |
+| 16 | [`20261128000000_clinic_sessions.sql`](../supabase/migrations/20261128000000_clinic_sessions.sql) | **Clinic sessions** (first come, first served): `clinic_sessions`, `clinic_session_availability` and `doctor_next_open_session` views, RPCs `create_clinic_sessions`, `cancel_clinic_session`, `book_session`, `move_session_booking`; `hospital_settings.time_zone` (**set it**, see §6a). Notification trigger updated (`visit_booked`; doctors not messaged per patient). **Redeploy `dispatch-notifications`** (§12) |
+| 17 | [`20261128000100_doctor_department.sql`](../supabase/migrations/20261128000100_doctor_department.sql) | `doctor_invites.department`; `claim_doctor_invite` copies it to the doctor (default "Outpatients") |
+| 18 | [`20261128000200_session_room.sql`](../supabase/migrations/20261128000200_session_room.sql) | `clinic_sessions.room`; `create_clinic_sessions` gains `p_room` (old 7-argument version dropped); `update_clinic_session` (room + patient limit, never below places booked) |
+| 19 | [`20261128000300_remove_family_members.sql`](../supabase/migrations/20261128000300_remove_family_members.sql) | `beneficiaries.archived_at`; `remove_beneficiary` (not "self", not with upcoming visits); `book_session` refuses removed family members |
+| 20 | [`20261128000400_validate_time_zone.sql`](../supabase/migrations/20261128000400_validate_time_zone.sql) | Trigger rejecting unknown `hospital_settings.time_zone` values (an invalid zone would break every session check) |
+| 21 | [`20261128000500_admin_notification_deliveries.sql`](../supabase/migrations/20261128000500_admin_notification_deliveries.sql) | Admins read `notification_deliveries`; `retry_notification_delivery` resets a failed row for the §12 retry sweep. **Redeploy `dispatch-notifications`** (room and cancellation reason in messages) |
+| 22 | [`20261128000600_remove_legacy_slots.sql`](../supabase/migrations/20261128000600_remove_legacy_slots.sql) | **Removes the retired slot system**: tables `appointment_slots`, `slot_holds`, `blackout_rules`, view `doctor_next_available_slots`, the seven slot/hold RPCs, the pg_cron hold sweep, `appointments.slot_id` and `hospital_settings.buffer_minutes`. **Deletes slot/hold/blackout data.** Older bookings keep their date and time. Steps 2, 7, 8, 10 and 13 created these; they still run in order on a new database |
+| 23 | [`20261129000000_hospital_info_and_settings.sql`](../supabase/migrations/20261129000000_hospital_info_and_settings.sql) | `hospital_info` (public contact details, admin-edited in **Settings**; phone/email start empty), platform settings on `hospital_settings` (booking window, check-in, reminders, no-shows, waitlist), `check_in_secret` + `rotate_check_in_code()`; changes are audited. See §6b |
+| 24 | [`20261129000100_visit_queue.sql`](../supabase/migrations/20261129000100_visit_queue.sql) | **Arrival queue**: status `no_show`; check-in/queue columns; `check_in_visit`, `advance_visit`, `call_next_in_queue`, `get_queue_status`, `book_follow_up`; `clinic_session_progress` view; booking window enforced. **Redeploy `dispatch-notifications`** (new message types, push deep links) |
+| 25 | [`20261129000200_reminders_and_waitlist.sql`](../supabase/migrations/20261129000200_reminders_and_waitlist.sql) | Reminders (evening before, morning of), automatic no-shows and waitlist expiry via `run_visit_housekeeping()` every 10 min (**needs pg_cron**, see §6b); `session_waitlist` with automatic booking when a place frees up; availability views gain `waitlist_count` / `in_booking_window` |
+| 26 | [`20261129000300_visit_reports.sql`](../supabase/migrations/20261129000300_visit_reports.sql) | `visit_report(from, to)`: attendance, no-show rate and waiting times for admins (**Reports**) |
+| 27 | [`20261129000400_query_performance.sql`](../supabase/migrations/20261129000400_query_performance.sql) | **Performance only, same results.** RLS policies check the caller once per query instead of once per row (doctor-only checks run only for doctors); indexes for the admin visit list, patient search (`pg_trgm`, installed into `extensions`), the updates feed and foreign-key deletes; availability views read the hospital clock once. Builds indexes with a brief write lock, so run it at a quiet time on a large database |
 
 ### 2a. Existing databases (set up through the SQL Editor)
 
@@ -86,10 +98,10 @@ New migrations: create them with `npm run db:new -- <name>` (names them `YYYYMMD
 select table_name from information_schema.tables
 where table_schema = 'public'
   and table_name in (
-    'profiles', 'doctors', 'appointment_slots', 'appointments',
-    'beneficiaries', 'slot_holds', 'doctor_invites', 'hospital_settings',
+    'profiles', 'doctors', 'clinic_sessions', 'appointments',
+    'beneficiaries', 'doctor_invites', 'hospital_settings',
     'notification_preferences', 'push_device_tokens', 'notification_deliveries',
-    'blackout_rules', 'admin_audit_log'
+    'admin_audit_log'
   )
 order by 1;
 ```
@@ -139,7 +151,7 @@ values ('DOCTOR_USER_UUID', 'General Practice', 'Pilot doctor', 0, 5, true)
 on conflict (id) do nothing;
 ```
 
-3. Sign in as that user and open **Schedule** to generate slots, **or** use commented templates in [`supabase/seed_pilot.sql`](../supabase/seed_pilot.sql) to insert `appointment_slots` manually.
+3. Sign in as that user and open **Schedule** to add clinic sessions (one-off or weekly), or have an admin do it from **Roster → Schedule**.
 
 ### 4b. Invite row + RPC (database only)
 
@@ -166,59 +178,96 @@ Goal: **one successful booking** end-to-end on web (appointment may stay **pendi
 |---|--------|----------|
 | 1 | Sign up as a new patient | Lands on patient Home; profile role `patient` |
 | 2 | Complete profile / self beneficiary if prompted | Booking can select “self” beneficiary |
-| 3 | **Book Appointment** → pick doctor → pick slot | Hold countdown (~5 minutes); slot moves to held |
+| 3 | **Book Appointment** → pick doctor → pick session | Sessions show places left; nothing is reserved until **Book** |
 | 4 | Intake → confirm | Success state; no hard error |
 | 5 | **My Visits** | New appointment visible (typically **pending**) |
-| 6 | *(Optional)* Sign in as doctor with slots on that day | Appointment appears on **Agenda** |
+| 6 | *(Optional)* Sign in as the doctor | Booking appears under that session on **Agenda**; session shows “1 / N booked” |
 
-If no doctors or slots appear, finish [§4 Doctor bootstrap](#4-doctor-bootstrap-until-phase-1-in-app-invites) and ensure `doctors.is_accepting_bookings = true` and slots are **`available`** with future date/time.
+If no doctors or sessions appear, finish [§4 Doctor bootstrap](#4-doctor-bootstrap-until-phase-1-in-app-invites) and ensure `doctors.is_accepting_bookings = true` and the doctor has a future session with places left.
 
 ---
 
-## 7. Security notes (I-21, I-22) — Phase 7
+## 6a. Clinic sessions (migration step 16)
 
-After migration **step 8** (`20260919000000_phase7_slot_security.sql`), patient slot transitions use **SECURITY DEFINER RPCs** instead of a broad UPDATE policy:
+Booking is by **clinic session**, first come, first served. A session is a doctor, a date, start/end times and a patient limit (1–200).
+
+| RPC | What it does |
+|---|---|
+| `create_clinic_sessions` | Doctor (own) or admin. One date, or weekly on chosen weekdays for 1–26 weeks. Skips dates that overlap an existing session or have already ended |
+| `cancel_clinic_session` | Doctor (own) or admin. Deletes a session nobody booked; otherwise marks it cancelled and cancels its bookings (patients notified) |
+| `book_session` | Patient books a place for themselves or a family member. Confirmed immediately. Refuses full, cancelled or ended sessions, a doctor not accepting bookings, and duplicate bookings for the same person |
+| `move_session_booking` | Moves a booking to another session of the same doctor (same checks) |
+
+Capacity is a live count of non-cancelled bookings, checked under a row lock on the session, so the last place can't be sold twice. Clients cannot write `clinic_sessions` or change `appointments.session_id` directly.
+
+**Set the hospital time zone** (session times are local wall-clock times; the database runs in UTC). It decides when a session has "ended" for booking. Admins can set it in **Settings → Hospital time zone**, or in SQL:
+
+```sql
+update public.hospital_settings set time_zone = 'Africa/Lagos' where id = 1;  -- your IANA zone
+```
+
+The older slot, hold and blackout system was removed by step 22.
+
+## 6b. Hospital details, check-in, queue, reminders, waitlist (steps 23–26)
+
+**After deploying, an admin opens Settings and:**
+
+1. Fills in **Hospital information** (name, phone, email, address, opening hours). They appear on the About screen, the Privacy Policy, Terms and the account deletion page, and in message subjects. App stores require a working contact.
+2. Checks **Booking & visits**: booking window (default 60 days), check-in opening (120 min before a session), reminders (6 PM the evening before, 7 AM on the day), automatic no-shows (30 min after a session ends) and the waitlist. All are in the hospital time zone.
+3. Prints the **Check-in poster** and puts it at reception. Patients scan it in the app (or type the 6-character code) to join the queue. **New code** invalidates the old poster immediately.
+
+**Visit flow on the day**
+
+| Step | Who | How |
+|---|---|---|
+| Check in | Patient (code) or staff (no code) | `check_in_visit` — opens `check_in_opens_minutes` before the session, closes at its end; assigns the next queue number |
+| Call in | Doctor / admin | **Call next** (`call_next_in_queue`) or per patient (`advance_visit … 'call'`). The patient gets a push + SMS ("It's your turn"); whoever is now first in line gets "You're next" (push) |
+| Seen / no-show | Doctor / admin | `advance_visit … 'complete' / 'no_show'` (only once the session has started or the patient has checked in) |
+| Follow-up | Doctor / admin | `book_follow_up` into a future session of the same doctor (ignores the booking window and "accepting bookings") |
+
+Reception staff use admin accounts: **Clinics → Open queue** marks patients without the app as arrived.
+
+**Known limitation:** the poster code is static, so someone who photographed it could check in before arriving (within the check-in window). Keep the check-in window short, issue a **New code** if it circulates, and treat the queue number as advisory if staff see someone arrive later than their check-in.
+
+At the end of each session (plus the grace period, if automatic no-shows are on) housekeeping closes anything still open: called-in patients become **seen**, booked or checked-in-but-never-called patients become **no-shows**. Waitlists close when the session starts.
+
+**Scheduled housekeeping (pg_cron).** Step 25 schedules `select public.run_visit_housekeeping()` every 10 minutes **only if pg_cron is enabled** (Dashboard → Database → Extensions → `pg_cron`; then re-run step 25). Without it no reminders are sent and no-shows are not recorded automatically (the migration prints a notice). Check it is scheduled:
+
+```sql
+select jobname, schedule from cron.job where jobname = 'visit-housekeeping';
+```
+
+Messages still go through `notification_deliveries` → Database Webhook → `dispatch-notifications`, so the §12 webhook and retry sweep must be set up too.
+
+**Waitlist.** When a session is full, patients can join its waitlist (`join_waitlist`) until it starts. When a place frees up before the start (cancellation, a booking moved away, a higher patient limit) the first person waiting is booked automatically (`source = 'waitlist'`) and told. Waitlists close when the session starts or is cancelled.
+
+Time-sensitive messages that are retried too late ("it's your turn" after 10 minutes, "you're next" after 15, same-day reminders after 4 hours) are skipped rather than sent.
+
+## 7. Security notes
+
+Booking writes go through **SECURITY DEFINER RPCs**; patients have no direct INSERT/UPDATE on `appointments`, and clients can't write `clinic_sessions` (see §6a for the session RPCs).
 
 | RPC | Purpose |
 |-----|---------|
-| `hold_slot_if_available` | Atomic hold when slot is `available` or already held by caller |
-| `release_slot_hold` | Caller releases their hold |
-| `book_held_slot` | Caller’s valid hold → `booked` |
-| `free_orphan_booked_slot` | `booked` → `available` when no pending/confirmed appointment references the slot (cancel / reschedule) |
-| `cleanup_expired_slot_holds` | Expired holds + `held` → `available` (called by `hold_slot_if_available`; scheduled every minute by pg_cron after step 10 if the extension is enabled) |
+| `cancel_appointment` | Patient, doctor or admin cancels a booking; frees the session place |
+| `delete_my_account` | Patient self-deletion (step 15) |
+| `remove_beneficiary` | Hide a family member (step 19) |
+| `retry_notification_delivery` | Admin re-queues a failed message (step 21) |
 
-The policy **“Authenticated users update slots for booking”** is **dropped**. Doctors and admins still manage slots via existing doctor/admin RLS policies (schedule, blackouts).
+Other rules:
 
-**Admin audit:** table `admin_audit_log` (admins read-only via RLS) records `doctor_invite_created`, `doctor_invite_revoked`, `profile_deactivated`, and `profile_reactivated` via triggers.
+- Doctors may update their own appointments directly, but only `status` (pending→confirmed/cancelled, confirmed→completed/cancelled), `room`, `video_url` and `notes`. `video_url` must be `https://`. Nobody can change `session_id` directly.
+- Deactivated accounts (`profiles.is_active = false`) lose all data access, including RPCs, even with a live session (step 11).
+- Internal SECURITY DEFINER helpers (`enqueue_notification_deliveries`, `log_admin_audit`, trigger functions, `session_booking_error`) are not executable by `anon`/`authenticated`.
+- **Admin audit:** `admin_audit_log` (admins read-only) records doctor invite creation/revocation and account deactivation/reactivation; shown in the app under **Activity**.
 
-**Deploy note:** Apply step 8 **before** shipping a client build that calls these RPCs. Older app versions against a DB without step 8 still rely on the broad UPDATE policy (step 2 only).
-
-**Pre–Phase 7 pilots (step 8 not applied):** holds were client-side upserts with a race (I-21) and any authenticated user could UPDATE slots (I-22). Do not run a Phase 7 client against that schema.
-
-### 7a. Security hardening (step 10)
-
-`20260921000000_security_hardening.sql` must be applied **before** shipping a client build that includes the transactional booking changes — the client calls the new RPCs below, and the migration removes patients' direct INSERT/UPDATE on `appointments`, so **older clients can no longer book, reschedule or cancel** once it is applied. Deploy DB + client together.
-
-| RPC | Purpose |
-|-----|---------|
-| `book_appointment_from_hold` | Validates hold, slot, doctor availability and beneficiary; inserts the appointment, books the slot, clears the hold — one transaction |
-| `reschedule_appointment` | Moves an appointment to a slot the caller holds (same doctor), books it, frees the old slot — one transaction |
-| `cancel_appointment` | Cancels and frees the slot — one transaction |
-
-Other changes:
-
-- `appointments_one_active_per_slot` — partial unique index; the migration aborts with instructions if duplicates exist.
-- Doctors may still update their own appointments directly, but only `status` (pending→confirmed/cancelled, confirmed→completed/cancelled), `room`, `video_url` and `notes`. `video_url` must be `https://`.
-- Taking a new slot hold releases the caller's other holds (one active hold per user). Holds are visible only to their owner.
-- Internal SECURITY DEFINER helpers (`enqueue_notification_deliveries`, `log_admin_audit`, trigger functions) are no longer executable by `anon`/`authenticated`.
-- `free_orphan_booked_slot` is restricted to the slot's doctor or an admin.
-- **pg_cron (recommended):** enable it under Database → Extensions, then re-run the migration to schedule the expired-hold sweep.
+History: steps 8 and 10 introduced slot-hold RPCs (`hold_slot_if_available`, `book_appointment_from_hold`, …) for the original slot model. Step 22 removed them.
 
 ---
 
 ## 8. Optional seed file
 
-[`supabase/seed_pilot.sql`](../supabase/seed_pilot.sql) contains **commented templates only** (admin note, doctor row, sample slots). It is not run automatically by the app. Uncomment and edit UUIDs/dates when you want copy-paste examples.
+[`supabase/seed_pilot.sql`](../supabase/seed_pilot.sql) contains **commented templates only** (admin note, doctor row, sample clinic sessions, invite). It is not run automatically by the app. Uncomment and edit UUIDs/dates when you want copy-paste examples.
 
 ---
 
@@ -229,7 +278,7 @@ Other changes:
 | “Invalid API key” / network errors | `.env` URL and anon key; restart dev server |
 | Login works but wrong screens | `profiles.role`; sign out/in; `is_active = true` |
 | No doctors in picker | `doctors` row exists, `is_active`, `is_accepting_bookings` |
-| No slots | Doctor **Schedule** tab or seed templates; slot `status = 'available'`, future date |
+| No sessions | Doctor **Schedule** tab (or admin **Roster → Schedule**); session `status = 'scheduled'`, not ended, places left. Wrong “ended” cut-off → check `hospital_settings.time_zone` (§6a) |
 | RLS errors in console | Migrations 1–4 applied; user authenticated |
 
 ---
@@ -268,12 +317,12 @@ Run on the **production** web URL after export/deploy:
 | Area | Check |
 |------|--------|
 | Ops | Migrations through step 8 applied (Phase 7 RPCs for production traffic) |
-| Onboarding | Admin invite → doctor claim → Schedule slots |
-| Patient book | Stepper + hold banner; grouped slots; confirm shows beneficiary |
-| Pending flow | Doctor agenda pending badge → confirm (room / video URL) |
+| Onboarding | Admin invite → doctor claim → Schedule: add weekly sessions |
+| Patient book | Doctor → session (places left) → details → Book; “You’re booked” shows the session and arrival note |
+| Sessions | Fill a session to its limit → it disappears for patients; cancel a booked session → patients get “visit cancelled” |
 | Lifecycle | Mark complete → patient Past |
 | Account | Forgot password; admin deactivate |
-| UX spot-check | Add dependent “Book now” vs “Add only”; remove future blackout |
+| UX spot-check | Add dependent “Book now” vs “Add only”; change session from My Visits |
 | Quality | `npm run typecheck` and `npm run lint` clean; `npm run export:web` succeeds |
 | Notifications | Opt-in on Profile → book / confirm / cancel → rows in `notification_deliveries` (`sent` or `skipped`) |
 

@@ -20,7 +20,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "org.famehmrc.booking"
+      "bundleIdentifier": "org.famehmrc.booking",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "org.famehmrc.booking",
@@ -30,7 +33,11 @@
       },
       "permissions": [
         "android.permission.READ_CALENDAR",
-        "android.permission.WRITE_CALENDAR"
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.CAMERA"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -48,9 +55,18 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
-          "color": "#ffffff",
+          "icon": "./assets/notification-icon.png",
+          "color": "#2563EB",
+          "defaultChannel": "default",
           "sounds": []
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to scan the check-in code at reception.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ]
     ],

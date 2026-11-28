@@ -51,7 +51,7 @@ export const accountsService = {
   /**
    * Permanently deletes the signed-in patient's account and data
    * (delete_my_account RPC), then clears the local session. Upcoming visits
-   * are cancelled first so doctors are told and slots reopen.
+   * are cancelled first so their places reopen.
    */
   async deleteMyAccount(): Promise<{ cancelledVisits: number }> {
     const { data, error } = await supabase.rpc("delete_my_account");

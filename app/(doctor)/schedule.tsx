@@ -16,7 +16,7 @@ export default function DoctorScheduleScreen() {
       <ShellHeader title="Schedule" />
       <DoctorSchedulePanel
         doctorId={session.userId}
-        intro="Manage your open appointment windows and whether patients can book you."
+        intro="Set up your clinic sessions and choose whether patients can book you."
       />
     </View>
   );

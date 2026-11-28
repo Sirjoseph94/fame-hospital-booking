@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
@@ -7,11 +7,14 @@ import {
   Text,
   View,
 } from "react-native";
-import * as Linking from "expo-linking";
 import { isPast, parseISO } from "date-fns";
+import { router } from "expo-router";
 
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
-import { RescheduleSheet } from "@/components/patient/reschedule-sheet";
+import { CheckInSheet } from "@/components/patient/check-in-sheet";
+import { MoveSessionSheet } from "@/components/patient/move-session-sheet";
+import { QueueStatusCard } from "@/components/patient/queue-status-card";
+import { WaitlistCard } from "@/components/patient/waitlist-card";
 import { VisitCard } from "@/components/ui/visit-card";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -31,9 +34,7 @@ import { useBeneficiaries } from "@/lib/queries/beneficiaries";
 import { useDoctors } from "@/lib/queries/doctors";
 import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
-import { telehealthJoinState } from "@/lib/telehealth-join";
 import { useSessionStore } from "@/lib/stores/session";
-import { useVisitStatusSnapshot } from "@/lib/stores/visit-status-snapshot";
 import { SchedulingError } from "@/lib/services/scheduling";
 import type { Appointment, Beneficiary } from "@/types/scheduling";
 
@@ -42,7 +43,7 @@ type VisitsTab = "upcoming" | "past" | "proxy";
 const tabs: { id: VisitsTab; label: string }[] = [
   { id: "upcoming", label: "Upcoming" },
   { id: "past", label: "Past" },
-  { id: "proxy", label: "Proxy Managed" },
+  { id: "proxy", label: "Family" },
 ];
 
 interface EnrichedVisit extends Appointment {
@@ -60,7 +61,6 @@ function visitsErrorMessage(cause: unknown): string {
 
 export default function PatientVisitsScreen() {
   const userId = useSessionStore((state) => state.session?.userId);
-  const mergeStatuses = useVisitStatusSnapshot((state) => state.mergeStatuses);
   const [activeTab, setActiveTab] = useState<VisitsTab>("upcoming");
   const appointmentsQuery = usePatientAppointments(userId);
   const beneficiariesQuery = useBeneficiaries(userId);
@@ -71,7 +71,8 @@ export default function PatientVisitsScreen() {
     null,
   );
   const [cancelBanner, setCancelBanner] = useState<string | null>(null);
-  // Re-render every minute so telehealth join windows stay current.
+  const [checkInTarget, setCheckInTarget] = useState<EnrichedVisit | null>(null);
+  // Re-render every minute so visits move to Past when their session ends.
   useNow(60_000);
 
   // Refresh when the tab regains focus (e.g. after booking).
@@ -84,22 +85,6 @@ export default function PatientVisitsScreen() {
   const appointmentRows = appointmentsQuery.data;
   const beneficiaryRows = beneficiariesQuery.data;
   const doctorRows = doctorsQuery.data;
-
-  // Announce status changes (e.g. a doctor confirmed a visit) whenever fresh
-  // appointment data arrives.
-  useEffect(() => {
-    if (!appointmentRows) {
-      return;
-    }
-    const snapshot: Record<string, Appointment["dbStatus"]> = {};
-    appointmentRows.forEach((row) => {
-      snapshot[row.id] = row.dbStatus;
-    });
-    const announcements = mergeStatuses(snapshot);
-    for (const line of announcements) {
-      AccessibilityInfo.announceForAccessibility(line);
-    }
-  }, [appointmentRows, mergeStatuses]);
 
   const visitQueries = [appointmentsQuery, beneficiariesQuery, doctorsQuery];
   const initialLoading = visitQueries.some(
@@ -128,7 +113,7 @@ export default function PatientVisitsScreen() {
       doctorNames[doctor.id] = doctor.name;
     });
     return (appointmentRows ?? []).flatMap((appointment) => {
-      if (!appointment.startsAt) {
+      if (!appointment.startsAt || !appointment.endsAt) {
         return [];
       }
 
@@ -157,9 +142,7 @@ export default function PatientVisitsScreen() {
   const filtered = useMemo(() => {
     if (activeTab === "upcoming") {
       return enriched.filter(
-        (visit) =>
-          visit.status === "upcoming" &&
-          !isPast(parseISO(visit.startsAt!)),
+        (visit) => visit.status === "upcoming" && !isPast(parseISO(visit.endsAt!)),
       );
     }
     if (activeTab === "past") {
@@ -167,7 +150,8 @@ export default function PatientVisitsScreen() {
         (visit) =>
           visit.status === "completed" ||
           visit.status === "cancelled" ||
-          (visit.status === "upcoming" && isPast(parseISO(visit.startsAt!))),
+          visit.status === "missed" ||
+          (visit.status === "upcoming" && isPast(parseISO(visit.endsAt!))),
       );
     }
     return enriched.filter(
@@ -178,7 +162,7 @@ export default function PatientVisitsScreen() {
   const cancelVisit = async (visit: EnrichedVisit) => {
     const confirmed = await confirmAsync({
       title: "Cancel appointment?",
-      message: "This will release the time slot for other patients.",
+      message: "Your place in the session will be given to another patient.",
       confirmText: "Cancel appointment",
       cancelText: "Keep appointment",
       destructive: true,
@@ -188,7 +172,7 @@ export default function PatientVisitsScreen() {
     }
     try {
       await cancelAppointment.mutateAsync(visit.id);
-      setCancelBanner("Appointment cancelled.");
+      setCancelBanner("Appointment cancelled. Your place has been released for other patients.");
       AccessibilityInfo.announceForAccessibility("Appointment cancelled.");
     } catch (cause) {
       const message =
@@ -197,18 +181,6 @@ export default function PatientVisitsScreen() {
           : "Could not cancel the appointment.";
       showAlert("Cancel failed", message);
     }
-  };
-
-  const joinTelehealth = (visit: EnrichedVisit) => {
-    const url = visit.videoUrl;
-    if (!url) {
-      showAlert(
-        "Join unavailable",
-        "This telehealth link is not ready yet. Contact the hospital if you need help.",
-      );
-      return;
-    }
-    void Linking.openURL(url);
   };
 
   return (
@@ -279,10 +251,17 @@ export default function PatientVisitsScreen() {
               <Text accessibilityLiveRegion="polite" className="text-base text-ink">
                 {cancelBanner}
               </Text>
-              <Text className="text-sm text-ink-muted">
-                The time slot is available for other patients.
-              </Text>
             </Card>
+          ) : null}
+
+          {activeTab === "upcoming" && userId ? (
+            <WaitlistCard
+              doctorName={(doctorId) => doctorRows?.find((row) => row.id === doctorId)?.name ?? "Doctor"}
+              patientName={(beneficiaryId) =>
+                beneficiaryRows?.find((row) => row.id === beneficiaryId)?.displayName ?? "Patient"
+              }
+              userId={userId}
+            />
           ) : null}
 
           {filtered.length === 0 ? (
@@ -292,49 +271,48 @@ export default function PatientVisitsScreen() {
                   ? "No upcoming visits."
                   : activeTab === "past"
                     ? "No past visits yet."
-                    : "No proxy-managed visits."
+                    : "No visits for family members."
               }
             />
           ) : (
             filtered.map((visit) => {
-              const join = visit.startsAt
-                ? telehealthJoinState(visit.startsAt, visit.endsAt)
-                : { showJoin: false, label: "" };
-
               return (
                 <View className="gap-2" key={visit.id}>
                   <VisitCard
-                    address={visit.address}
                     beneficiaryName={visit.beneficiaryName}
                     dbStatus={visit.dbStatus}
                     doctorName={visit.doctorName}
+                    endsAt={visit.endsAt!}
+                    progress={visit}
                     proxyTag={visit.proxyTag}
                     room={visit.room}
+                    sessionCancelled={visit.sessionCancelled}
                     startsAt={visit.startsAt!}
                     status={visit.status}
-                    telehealthJoinLabel={
-                      visit.type === "telehealth" &&
-                      visit.dbStatus === "confirmed" &&
-                      visit.videoUrl &&
-                      join.showJoin
-                        ? join.label
-                        : undefined
-                    }
-                    type={visit.type}
-                    onJoinTelehealth={() => joinTelehealth(visit)}
+                    onPress={() => router.push({ pathname: "/visit/[id]", params: { id: visit.id } })}
                   />
-                  {visit.status === "upcoming" && activeTab === "upcoming" ? (
+                  {visit.status === "upcoming" && activeTab !== "past" ? (
+                    <QueueStatusCard
+                      compact
+                      room={visit.room}
+                      visit={{ ...visit, startsAt: visit.startsAt!, endsAt: visit.endsAt! }}
+                      onCheckIn={() => setCheckInTarget(visit)}
+                    />
+                  ) : null}
+                  {visit.status === "upcoming" && activeTab === "upcoming" && !visit.checkedInAt ? (
                     <View className="flex-row gap-2">
-                      <Pressable
-                        accessibilityLabel={`Reschedule visit with ${visit.doctorName}`}
-                        accessibilityRole="button"
-                        className="min-h-12 flex-1 items-center justify-center rounded-xl border border-primary px-3 web:hover:opacity-90"
-                        onPress={() => setRescheduleTarget(visit)}
-                      >
-                        <Text className="font-semibold text-primary">
-                          Reschedule
-                        </Text>
-                      </Pressable>
+                      {visit.sessionId ? (
+                        <Pressable
+                          accessibilityLabel={`Change session with ${visit.doctorName}`}
+                          accessibilityRole="button"
+                          className="min-h-12 flex-1 items-center justify-center rounded-xl border border-primary px-3 web:hover:opacity-90"
+                          onPress={() => setRescheduleTarget(visit)}
+                        >
+                          <Text className="font-semibold text-primary">
+                            Change session
+                          </Text>
+                        </Pressable>
+                      ) : null}
                       <Pressable
                         accessibilityLabel={`Cancel visit with ${visit.doctorName}`}
                         accessibilityRole="button"
@@ -353,10 +331,23 @@ export default function PatientVisitsScreen() {
         </ScrollView>
       )}
 
+      {checkInTarget ? (
+        <CheckInSheet
+          key={checkInTarget.id}
+          appointmentId={checkInTarget.id}
+          doctorName={checkInTarget.doctorName}
+          patientName={checkInTarget.beneficiaryName}
+          onCheckedIn={({ queueNumber }) => setCancelBanner(`Checked in. Your number is ${queueNumber}.`)}
+          onOpenChange={(open) => {
+            if (!open) setCheckInTarget(null);
+          }}
+        />
+      ) : null}
+
       {rescheduleTarget ? (
-        <RescheduleSheet
+        <MoveSessionSheet
           appointmentId={rescheduleTarget.id}
-          currentSlotId={rescheduleTarget.slotId}
+          currentSessionId={rescheduleTarget.sessionId}
           doctorId={rescheduleTarget.doctorId}
           doctorName={rescheduleTarget.doctorName}
           open={Boolean(rescheduleTarget)}
@@ -365,9 +356,9 @@ export default function PatientVisitsScreen() {
               setRescheduleTarget(null);
             }
           }}
-          onRescheduled={() => {
+          onMoved={() => {
             setCancelBanner(null);
-            AccessibilityInfo.announceForAccessibility("Visit rescheduled.");
+            AccessibilityInfo.announceForAccessibility("Booking moved.");
           }}
         />
       ) : null}

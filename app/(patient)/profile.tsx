@@ -11,7 +11,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Link, router } from "expo-router";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
+import { AboutLinksCard } from "@/components/hospital/about-links-card";
 import { NotificationPreferencesCard } from "@/components/notifications/notification-preferences-card";
+import { FamilyMembersCard } from "@/components/patient/family-members-card";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
@@ -325,6 +327,8 @@ export default function PatientProfileScreen() {
             ))}
           </Card>
 
+          {session?.userId ? <FamilyMembersCard userId={session.userId} /> : null}
+
           {session?.userId ? (
             <NotificationPreferencesCard
               phone={phoneValue}
@@ -388,6 +392,8 @@ export default function PatientProfileScreen() {
               <Text className="font-semibold text-surface">Save profile</Text>
             )}
           </Pressable>
+
+          <AboutLinksCard />
 
           <Card style={{ gap: 8 }}>
             <Text className="text-base font-semibold text-ink">Delete account</Text>

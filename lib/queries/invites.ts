@@ -6,7 +6,7 @@ import {
   type CreateDoctorInviteInput,
 } from "@/lib/services/invites";
 
-/** Admin: pending doctor invites. */
+/** Admin: recent doctor invites (all statuses). */
 export function useDoctorInvites(enabled = true) {
   return useQuery({
     queryKey: queryKeys.invites,

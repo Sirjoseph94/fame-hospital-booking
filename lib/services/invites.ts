@@ -19,6 +19,7 @@ export interface DoctorInvite {
   code: string;
   email: string;
   specialty: string;
+  department: string | null;
   bio: string | null;
   consultationFee: number;
   yearsExperience: number;
@@ -30,6 +31,7 @@ export interface DoctorInvite {
 export interface CreateDoctorInviteInput {
   email: string;
   specialty: string;
+  department?: string;
   bio?: string;
   consultationFee?: number;
   yearsExperience?: number;
@@ -41,6 +43,7 @@ interface DoctorInviteRow {
   code: string;
   email: string;
   specialty: string;
+  department: string | null;
   bio: string | null;
   consultation_fee: number | null;
   years_experience: number | null;
@@ -65,6 +68,7 @@ function mapInvite(row: DoctorInviteRow): DoctorInvite {
     code: row.code,
     email: row.email,
     specialty: row.specialty,
+    department: row.department,
     bio: row.bio,
     consultationFee: Number(row.consultation_fee ?? 0),
     yearsExperience: Number(row.years_experience ?? 0),
@@ -72,6 +76,20 @@ function mapInvite(row: DoctorInviteRow): DoctorInvite {
     expiresAt: row.expires_at,
     createdAt: row.created_at,
   };
+}
+
+/**
+ * Status as an admin should see it: a pending invite past its expiry is
+ * "expired" (the database only marks it when someone tries to claim it).
+ */
+export function effectiveInviteStatus(
+  invite: Pick<DoctorInvite, "status" | "expiresAt">,
+  now: Date = new Date(),
+): DoctorInviteStatus {
+  if (invite.status === "pending" && new Date(invite.expiresAt).getTime() <= now.getTime()) {
+    return "expired";
+  }
+  return invite.status;
 }
 
 function generateInviteCode(): string {
@@ -130,6 +148,7 @@ export const invitesService = {
           code,
           email: input.email.trim(),
           specialty: input.specialty.trim(),
+          department: input.department?.trim() || null,
           bio: input.bio?.trim() || null,
           consultation_fee: input.consultationFee ?? 0,
           years_experience: input.yearsExperience ?? 0,
@@ -138,7 +157,7 @@ export const invitesService = {
           created_by: createdBy,
         })
         .select(
-          "id, code, email, specialty, bio, consultation_fee, years_experience, status, expires_at, created_at",
+          "id, code, email, specialty, department, bio, consultation_fee, years_experience, status, expires_at, created_at",
         )
         .single();
 
@@ -153,16 +172,17 @@ export const invitesService = {
     throw new InviteError("Could not generate a unique invite code. Try again.");
   },
 
+  /** Recent invites of every status, newest first. */
   async listDoctorInvites(): Promise<DoctorInvite[]> {
     await assertAdmin();
 
     const { data, error } = await supabase
       .from("doctor_invites")
       .select(
-        "id, code, email, specialty, bio, consultation_fee, years_experience, status, expires_at, created_at",
+        "id, code, email, specialty, department, bio, consultation_fee, years_experience, status, expires_at, created_at",
       )
-      .eq("status", "pending")
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(100);
 
     if (error) {
       asInviteError(error);

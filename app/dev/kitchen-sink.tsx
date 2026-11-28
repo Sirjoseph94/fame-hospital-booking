@@ -7,41 +7,54 @@ import {
   View,
 } from "react-native";
 import { Stack } from "expo-router";
-import { addDays, setHours, setMinutes } from "date-fns";
+import { addDays, format, setHours, setMinutes } from "date-fns";
 
-import { AppointmentTypeToggle } from "@/components/ui/appointment-type-toggle";
 import { BeneficiaryPill } from "@/components/ui/beneficiary-pill";
 import { Card } from "@/components/ui/card";
 import { Sheet } from "@/components/ui/sheet";
-import { SlotChip, type SlotChipVariant } from "@/components/ui/slot-chip";
+import { SessionOption } from "@/components/ui/session-option";
 import { VisitCard } from "@/components/ui/visit-card";
 import { isWeb } from "@/lib/platform";
 import {
   SchedulingError,
   schedulingService,
 } from "@/lib/services/scheduling";
-import type { AppointmentType } from "@/types/scheduling";
+import type { ClinicSession } from "@/types/scheduling";
 
 function demoTime(hour: number, minute = 0): string {
   return setMinutes(setHours(addDays(new Date(), 1), hour), minute).toISOString();
 }
 
-const slotVariants: { variant: SlotChipVariant; label: string }[] = [
-  { variant: "available", label: "9:00 AM" },
-  { variant: "selected", label: "9:30 AM" },
-  { variant: "held-by-other", label: "10:00 AM" },
-  { variant: "booked", label: "10:30 AM" },
-  { variant: "blackout", label: "11:00 AM" },
+function demoSession(id: string, startHour: number, endHour: number, booked: number, capacity: number): ClinicSession {
+  return {
+    id,
+    doctorId: "demo",
+    dateYmd: format(addDays(new Date(), 1), "yyyy-MM-dd"),
+    startsAt: demoTime(startHour),
+    endsAt: demoTime(endHour),
+    capacity,
+    bookedCount: booked,
+    placesLeft: Math.max(capacity - booked, 0),
+    status: "scheduled",
+    isBookable: booked < capacity,
+    inBookingWindow: true,
+    waitlistCount: 0,
+  };
+}
+
+const demoSessions = [
+  demoSession("plenty", 9, 13, 4, 20),
+  demoSession("few", 14, 17, 18, 20),
+  demoSession("full", 17, 19, 10, 10),
 ];
 
 export default function KitchenSinkScreen() {
-  const [appointmentType, setAppointmentType] =
-    useState<AppointmentType>("in-clinic");
+  const [selectedSession, setSelectedSession] = useState("plenty");
   const [selectedBeneficiary, setSelectedBeneficiary] = useState("self");
   const [sheetOpen, setSheetOpen] = useState(false);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
 
-  const injectFailure = (code: "SLOT_TAKEN" | "HOLD_EXPIRED" | "NETWORK_ERROR") => {
+  const injectFailure = (code: "SESSION_UNAVAILABLE" | "NETWORK_ERROR") => {
     schedulingService.injectNextFailure(code);
     setFailureMessage(`Next scheduling call will throw ${code}.`);
     AccessibilityInfo.announceForAccessibility(
@@ -100,34 +113,18 @@ export default function KitchenSinkScreen() {
         </Card>
 
         <Card style={{ gap: 12 }}>
-          <Text className="text-lg font-semibold text-ink">SlotChip</Text>
-          <View
-            accessibilityLabel="Slot picker grid"
-            className="flex-row flex-wrap gap-2"
-          >
-            {slotVariants.map(({ variant, label }) => (
-              <SlotChip
-                key={variant}
-                label={label}
-                variant={variant}
-                onPress={
-                  variant === "available" || variant === "selected"
-                    ? () => undefined
-                    : undefined
-                }
+          <Text className="text-lg font-semibold text-ink">SessionOption</Text>
+          <View accessibilityRole="radiogroup" className="gap-2">
+            {demoSessions.map((session) => (
+              <SessionOption
+                key={session.id}
+                disabled={!session.isBookable}
+                selected={selectedSession === session.id}
+                session={session}
+                onPress={() => setSelectedSession(session.id)}
               />
             ))}
           </View>
-        </Card>
-
-        <Card style={{ gap: 12 }}>
-          <Text className="text-lg font-semibold text-ink">
-            AppointmentTypeToggle
-          </Text>
-          <AppointmentTypeToggle
-            value={appointmentType}
-            onChange={setAppointmentType}
-          />
         </Card>
 
         <Card style={{ gap: 12 }}>
@@ -135,27 +132,25 @@ export default function KitchenSinkScreen() {
           <VisitCard
             beneficiaryName="Alex Morgan"
             doctorName="Dr. Amelia Thorne"
+            endsAt={demoTime(13)}
             room="Cardiology 4"
             startsAt={demoTime(9)}
             status="upcoming"
-            type="in-clinic"
           />
           <VisitCard
             beneficiaryName="Jordan Morgan"
             doctorName="Dr. Chidi Okafor"
-            proxyTag="Booked by Alex Morgan [child]"
-            startsAt={demoTime(14, 30)}
+            endsAt={demoTime(17)}
+            proxyTag="Booked for Jordan Morgan [child]"
+            startsAt={demoTime(14)}
             status="upcoming"
-            telehealthJoinLabel="Join in 15 min"
-            type="telehealth"
-            onJoinTelehealth={() => undefined}
           />
           <VisitCard
             beneficiaryName="Alex Morgan"
             doctorName="Dr. Amelia Thorne"
+            endsAt={demoTime(12)}
             startsAt={demoTime(8)}
             status="cancelled"
-            type="in-clinic"
           />
         </Card>
 
@@ -179,7 +174,7 @@ export default function KitchenSinkScreen() {
           </Text>
           <View className="flex-row flex-wrap gap-2">
             {(
-              ["SLOT_TAKEN", "HOLD_EXPIRED", "NETWORK_ERROR"] as const
+              ["SESSION_UNAVAILABLE", "NETWORK_ERROR"] as const
             ).map((code) => (
               <Pressable
                 key={code}

@@ -1,37 +1,21 @@
 import { Text, View } from "react-native";
 
 interface CapacityBarProps {
+  /** 0–100. */
   bookedPercent: number;
-  availablePercent: number;
-  blackoutPercent: number;
   label: string;
+  muted?: boolean;
 }
 
-export function CapacityBar({
-  bookedPercent,
-  availablePercent,
-  blackoutPercent,
-  label,
-}: CapacityBarProps) {
+/** How full a session is: booked share of its patient limit. */
+export function CapacityBar({ bookedPercent, label, muted = false }: CapacityBarProps) {
   return (
     <View accessibilityLabel={label}>
       <View className="h-3 flex-row overflow-hidden rounded-full bg-surface-muted">
         {bookedPercent > 0 ? (
           <View
-            className="h-full bg-primary"
-            style={{ width: `${bookedPercent}%` }}
-          />
-        ) : null}
-        {availablePercent > 0 ? (
-          <View
-            className="h-full bg-available"
-            style={{ width: `${availablePercent}%` }}
-          />
-        ) : null}
-        {blackoutPercent > 0 ? (
-          <View
-            className="h-full bg-ink-muted"
-            style={{ width: `${blackoutPercent}%` }}
+            className={`h-full ${muted ? "bg-ink-muted" : bookedPercent >= 100 ? "bg-warning" : "bg-primary"}`}
+            style={{ width: `${Math.min(bookedPercent, 100)}%` }}
           />
         ) : null}
       </View>

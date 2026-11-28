@@ -1,18 +1,19 @@
-import { addMinutes, differenceInMinutes, parseISO } from "date-fns";
+import { addMinutes, parseISO } from "date-fns";
 
 import type {
   Appointment,
   AppointmentDbStatus,
+  AppointmentSource,
   AppointmentStatus,
   AppointmentType,
   Beneficiary,
   BeneficiaryRelationship,
-  BlackoutRule,
+  ClinicSession,
+  ClinicSessionStatus,
   Doctor,
   DoctorDetail,
+  NextOpenSession,
   RosterDoctor,
-  Slot,
-  SlotStatus,
 } from "@/types/scheduling";
 
 export interface BeneficiaryRow {
@@ -24,6 +25,7 @@ export interface BeneficiaryRow {
   gender: string;
   national_id: string | null;
   hospital_file_id: string | null;
+  archived_at?: string | null;
 }
 
 export interface DoctorRow {
@@ -32,20 +34,50 @@ export interface DoctorRow {
   department: string;
   is_accepting_bookings: boolean;
   is_active: boolean;
+  bio?: string | null;
+  years_experience?: number | null;
   profile:
     | { full_name: string; is_active?: boolean }
     | { full_name: string; is_active?: boolean }[]
     | null;
 }
 
-export interface SlotRow {
-  id: string;
+/** A row of the clinic_session_availability view. */
+export interface SessionAvailabilityRow {
+  session_id: string;
   doctor_id: string;
-  slot_date: string;
+  session_date: string;
   start_time: string;
   end_time: string;
+  capacity: number;
   status: string;
+  cancel_reason: string | null;
+  booked_count: number;
+  places_left: number;
+  is_bookable: boolean;
+  room: string | null;
+  waitlist_count?: number | null;
+  in_booking_window?: boolean | null;
 }
+
+/** A row of the doctor_next_open_session view. */
+export interface NextOpenSessionRow {
+  doctor_id: string;
+  session_id: string;
+  session_date: string;
+  start_time: string;
+  end_time: string;
+  places_left: number;
+}
+
+type SessionTimes = {
+  session_date: string;
+  start_time: string;
+  end_time: string;
+  room?: string | null;
+  cancel_reason?: string | null;
+  status?: string;
+};
 
 export interface AppointmentRow {
   id: string;
@@ -53,7 +85,7 @@ export interface AppointmentRow {
   beneficiary_id: string | null;
   patient_id: string;
   doctor_id: string;
-  slot_id: string | null;
+  session_id: string | null;
   appointment_date: string;
   start_time: string;
   appointment_type: AppointmentType;
@@ -63,19 +95,13 @@ export interface AppointmentRow {
   address: string | null;
   reason: string | null;
   notes: string | null;
-  appointment_slots?:
-    | { slot_date: string; start_time: string; end_time: string }
-    | { slot_date: string; start_time: string; end_time: string }[]
-    | null;
-}
-
-export interface BlackoutRow {
-  id: string;
-  doctor_id: string;
-  starts_at: string;
-  ends_at: string;
-  reason: string;
-  set_by: BlackoutRule["setBy"];
+  source?: string | null;
+  follow_up_of?: string | null;
+  checked_in_at?: string | null;
+  queue_number?: number | null;
+  called_at?: string | null;
+  finished_at?: string | null;
+  session?: SessionTimes | SessionTimes[] | null;
 }
 
 export function mapBeneficiary(row: BeneficiaryRow): Beneficiary {
@@ -88,6 +114,7 @@ export function mapBeneficiary(row: BeneficiaryRow): Beneficiary {
     gender: row.gender,
     nationalId: row.national_id ?? undefined,
     hospitalFileId: row.hospital_file_id ?? undefined,
+    archived: Boolean(row.archived_at),
   };
 }
 
@@ -113,16 +140,21 @@ function profileIsActive(profile: DoctorRow["profile"]): boolean {
   return profile.is_active !== false;
 }
 
-export function mapDoctor(row: DoctorRow, nextAvailable: string | null): Doctor {
+export function mapDoctor(
+  row: DoctorRow,
+  nextSession: NextOpenSession | null,
+): Doctor {
   const accountActive = profileIsActive(row.profile);
   return {
     id: row.id,
     name: profileName(row.profile),
     department: row.department,
     specialty: row.specialty,
-    nextAvailable,
+    nextSession,
     isAcceptingBookings:
       row.is_accepting_bookings && row.is_active && accountActive,
+    bio: row.bio?.trim() || undefined,
+    yearsExperience: row.years_experience ?? undefined,
   };
 }
 
@@ -139,57 +171,63 @@ export function mapDoctorDetail(row: DoctorRow): DoctorDetail {
 
 export function mapRosterDoctor(
   row: DoctorRow,
-  nextAvailable: string | null,
+  nextSession: NextOpenSession | null,
 ): RosterDoctor {
   const accountActive = profileIsActive(row.profile);
   return {
-    ...mapDoctor(row, nextAvailable),
+    ...mapDoctor(row, nextSession),
     accountActive,
   };
 }
 
-export function slotStartsAt(
-  row: Pick<SlotRow, "slot_date" | "start_time">,
-): string {
-  const time = row.start_time.length === 5 ? `${row.start_time}:00` : row.start_time;
-  return parseISO(`${row.slot_date}T${time}`).toISOString();
+/**
+ * Local wall-clock date + time from the database as an ISO instant. Dates and
+ * times are stored without a zone and read in the device's zone, which is the
+ * hospital's for patients and staff on site.
+ */
+export function localIso(dateYmd: string, time: string): string {
+  const withSeconds = time.length === 5 ? `${time}:00` : time;
+  return parseISO(`${dateYmd}T${withSeconds}`).toISOString();
 }
 
-export function slotDurationMin(row: SlotRow): number {
-  const start = slotStartsAt(row);
-  const endTime =
-    row.end_time.length === 5 ? `${row.end_time}:00` : row.end_time;
-  const end = parseISO(`${row.slot_date}T${endTime}`).toISOString();
-  return Math.max(differenceInMinutes(parseISO(end), parseISO(start)), 15);
-}
-
-export function mapSlotStatus(dbStatus: string): SlotStatus {
-  if (dbStatus === "blocked" || dbStatus === "blackout") {
-    return "blackout";
-  }
-  if (
-    dbStatus === "available" ||
-    dbStatus === "held" ||
-    dbStatus === "booked"
-  ) {
-    return dbStatus;
-  }
-  return "blackout";
-}
-
-export function mapSlot(row: SlotRow): Slot {
+export function mapNextOpenSession(row: NextOpenSessionRow): NextOpenSession {
   return {
-    id: row.id,
+    sessionId: row.session_id,
+    startsAt: localIso(row.session_date, row.start_time),
+    endsAt: localIso(row.session_date, row.end_time),
+    placesLeft: row.places_left,
+  };
+}
+
+function mapSessionStatus(status: string): ClinicSessionStatus {
+  return status === "cancelled" ? "cancelled" : "scheduled";
+}
+
+export function mapSession(row: SessionAvailabilityRow): ClinicSession {
+  return {
+    id: row.session_id,
     doctorId: row.doctor_id,
-    startsAt: slotStartsAt(row),
-    durationMin: slotDurationMin(row),
-    status: mapSlotStatus(row.status),
+    dateYmd: row.session_date,
+    startsAt: localIso(row.session_date, row.start_time),
+    endsAt: localIso(row.session_date, row.end_time),
+    capacity: row.capacity,
+    bookedCount: row.booked_count,
+    placesLeft: row.places_left,
+    status: mapSessionStatus(row.status),
+    room: row.room ?? undefined,
+    cancelReason: row.cancel_reason ?? undefined,
+    isBookable: row.is_bookable,
+    inBookingWindow: row.in_booking_window ?? row.is_bookable,
+    waitlistCount: row.waitlist_count ?? 0,
   };
 }
 
 export function mapDbAppointmentStatus(status: string): AppointmentStatus {
   if (status === "completed") {
     return "completed";
+  }
+  if (status === "no_show") {
+    return "missed";
   }
   if (status === "cancelled") {
     return "cancelled";
@@ -202,126 +240,62 @@ function mapDbStatus(status: string): AppointmentDbStatus {
     status === "pending" ||
     status === "confirmed" ||
     status === "cancelled" ||
-    status === "completed"
+    status === "completed" ||
+    status === "no_show"
   ) {
     return status;
   }
   return "confirmed";
 }
 
-function slotTimingFromRow(
-  row: AppointmentRow,
-): { date: string; startTime: string; endTime?: string } {
-  const slot = row.appointment_slots;
-  const slotRow = Array.isArray(slot) ? slot[0] : slot;
-  if (slotRow) {
+/** Visit window: the session's, or (older bookings) the stored start + 30 min. */
+function appointmentWindow(row: AppointmentRow): { startsAt: string; endsAt: string } {
+  const session = Array.isArray(row.session) ? row.session[0] : row.session;
+  if (session) {
     return {
-      date: slotRow.slot_date,
-      startTime: slotRow.start_time,
-      endTime: slotRow.end_time,
+      startsAt: localIso(session.session_date, session.start_time),
+      endsAt: localIso(session.session_date, session.end_time),
     };
   }
+  const startsAt = localIso(row.appointment_date, row.start_time);
   return {
-    date: row.appointment_date,
-    startTime: row.start_time,
+    startsAt,
+    endsAt: addMinutes(parseISO(startsAt), 30).toISOString(),
   };
 }
 
-function appointmentStartsAt(row: AppointmentRow): string | undefined {
-  const timing = slotTimingFromRow(row);
-  const time =
-    timing.startTime.length === 5
-      ? `${timing.startTime}:00`
-      : timing.startTime;
-  return parseISO(`${timing.date}T${time}`).toISOString();
-}
-
-function appointmentEndsAt(row: AppointmentRow): string | undefined {
-  const timing = slotTimingFromRow(row);
-  const startTime =
-    timing.startTime.length === 5
-      ? `${timing.startTime}:00`
-      : timing.startTime;
-  const start = parseISO(`${timing.date}T${startTime}`);
-  if (!timing.endTime) {
-    return addMinutes(start, 30).toISOString();
-  }
-  const time =
-    timing.endTime.length === 5 ? `${timing.endTime}:00` : timing.endTime;
-  return parseISO(`${timing.date}T${time}`).toISOString();
-}
-
 export function mapAppointment(row: AppointmentRow): Appointment {
-  const accountHolderId = row.account_holder_id ?? row.patient_id;
-  const beneficiaryId = row.beneficiary_id ?? row.patient_id;
-  if (!row.slot_id) {
-    throw new Error("Appointment row is missing slot_id.");
-  }
-
+  const { startsAt, endsAt } = appointmentWindow(row);
+  const session = Array.isArray(row.session) ? row.session[0] : row.session;
   return {
     id: row.id,
-    accountHolderId,
-    beneficiaryId,
+    accountHolderId: row.account_holder_id ?? row.patient_id,
+    beneficiaryId: row.beneficiary_id ?? row.patient_id,
     doctorId: row.doctor_id,
-    slotId: row.slot_id,
+    sessionId: row.session_id ?? undefined,
+    sessionCancelled:
+      session?.status === "cancelled"
+        ? { reason: session.cancel_reason?.trim() || undefined }
+        : undefined,
     type: row.appointment_type,
     status: mapDbAppointmentStatus(row.status),
     dbStatus: mapDbStatus(row.status),
-    startsAt: appointmentStartsAt(row),
-    endsAt: appointmentEndsAt(row),
-    room: row.room ?? undefined,
+    startsAt,
+    endsAt,
+    room: row.room ?? session?.room ?? undefined,
     videoUrl: row.video_url ?? undefined,
     address: row.address ?? undefined,
     reason: row.reason ?? undefined,
     notes: row.notes ?? undefined,
+    source: mapSource(row.source),
+    followUpOf: row.follow_up_of ?? undefined,
+    checkedInAt: row.checked_in_at ?? undefined,
+    queueNumber: row.queue_number ?? undefined,
+    calledAt: row.called_at ?? undefined,
+    finishedAt: row.finished_at ?? undefined,
   };
 }
 
-export function mapBlackout(row: BlackoutRow): BlackoutRule {
-  return {
-    id: row.id,
-    doctorId: row.doctor_id,
-    startsAt: row.starts_at,
-    endsAt: row.ends_at,
-    reason: row.reason,
-    setBy: row.set_by,
-  };
-}
-
-export function toDbAppointmentStatus(status: AppointmentStatus): string {
-  if (status === "completed") {
-    return "completed";
-  }
-  if (status === "cancelled") {
-    return "cancelled";
-  }
-  return "confirmed";
-}
-
-/** Marks slots unavailable when they fall inside a post-visit buffer window. */
-export function applyBufferToSlots(
-  slots: Slot[],
-  bookedEndsAt: string[],
-  bufferMinutes: number,
-): Slot[] {
-  if (bufferMinutes <= 0 || bookedEndsAt.length === 0) {
-    return slots;
-  }
-
-  return slots.map((slot) => {
-    if (slot.status !== "available") {
-      return slot;
-    }
-
-    const slotStart = parseISO(slot.startsAt).getTime();
-    const blocked = bookedEndsAt.some((endsAt) => {
-      const bufferEnd = addMinutes(parseISO(endsAt), bufferMinutes).getTime();
-      return slotStart >= parseISO(endsAt).getTime() && slotStart < bufferEnd;
-    });
-
-    if (blocked) {
-      return { ...slot, status: "blackout" as const };
-    }
-    return slot;
-  });
+function mapSource(source: string | null | undefined): AppointmentSource {
+  return source === "waitlist" || source === "follow_up" ? source : "patient";
 }

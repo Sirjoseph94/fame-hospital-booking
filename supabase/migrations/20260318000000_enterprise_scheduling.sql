@@ -8,8 +8,10 @@ create table if not exists public.hospital_settings (
   updated_at timestamptz default now()
 );
 
-insert into public.hospital_settings (id, buffer_minutes)
-values (1, 15)
+-- buffer_minutes has a default (and is dropped by 20261128000600), so only the
+-- id is inserted; this keeps the migration chain re-runnable.
+insert into public.hospital_settings (id)
+values (1)
 on conflict (id) do nothing;
 
 -- 2. Beneficiaries (account holder books for one or more people)

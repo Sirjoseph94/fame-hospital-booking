@@ -1,32 +1,66 @@
-// Appointments: booking, rescheduling, cancelling, and doctor visit actions.
-
-import { addMinutes, isBefore, parseISO } from "date-fns";
+// Appointments: booking into sessions, moving, cancelling, and doctor actions.
 
 import { doctorProxyTag } from "@/lib/doctor-agenda-helpers";
-import { todayYmdLocal } from "@/lib/scheduling-dates";
 import { supabase } from "@/lib/supabase";
-import type { AppointmentType, Beneficiary } from "@/types/scheduling";
+import type { Beneficiary, PatientSummary } from "@/types/scheduling";
 
 import { SchedulingError } from "./errors";
 import {
-  appointmentVisitDateYmd,
+  APPOINTMENT_SELECT,
+  appointmentManager,
   asNetworkError,
   assertCanManageAppointment,
-  assertValidHold,
   consumeFailure,
   fetchAppointmentRow,
   getCurrentUserId,
-  invokeSlotRpc,
+  getCurrentUserRole,
+  invokeSchedulingRpc,
   wait,
 } from "./internal";
-import { type AppointmentRow, mapAppointment, type SlotRow } from "./mappers";
+import { type AppointmentRow, mapAppointment } from "./mappers";
 import type { DoctorAgendaVisitContext, SchedulingService } from "./types";
+
+/**
+ * Fast, specific client-side check before cancelling or moving: the patient,
+ * the doctor, or an admin. The RPCs re-check everything server-side.
+ */
+async function assertCanChangeBooking(row: AppointmentRow): Promise<void> {
+  const userId = await getCurrentUserId();
+  if (appointmentManager(row, userId)) {
+    assertCanManageAppointment(row, userId);
+    return;
+  }
+  if ((await getCurrentUserRole()) !== "admin") {
+    throw new SchedulingError("FORBIDDEN", "You cannot modify this appointment.");
+  }
+  if (row.status === "cancelled" || row.status === "completed") {
+    throw new SchedulingError(
+      "INVALID_REQUEST",
+      "This appointment can no longer be changed.",
+    );
+  }
+}
+
+function rethrow(error: unknown): never {
+  if (error instanceof SchedulingError) {
+    throw error;
+  }
+  asNetworkError(error);
+}
 
 export const appointmentsMethods: Pick<
   SchedulingService,
-  "confirmBooking" | "listAppointments" | "listDoctorAppointments" | "enrichDoctorAgendaVisits" | "confirmDoctorAppointment" | "completeDoctorAppointment" | "rescheduleAppointment" | "cancelAppointment" | "listAppointmentsPage"
+  | "bookSession"
+  | "moveBooking"
+  | "listAppointments"
+  | "listDoctorAppointments"
+  | "listSessionAppointments"
+  | "enrichDoctorAgendaVisits"
+  | "getPatientSummary"
+  | "cancelAppointment"
+  | "listAppointmentsPage"
 > = {
-  async confirmBooking(input) {
+  async bookSession(input) {
     await wait();
     consumeFailure("NETWORK_ERROR");
 
@@ -35,42 +69,17 @@ export const appointmentsMethods: Pick<
       if (userId !== input.accountHolderId) {
         throw new SchedulingError(
           "FORBIDDEN",
-          "You can only confirm bookings for your own account.",
+          "You can only book for your own account.",
         );
       }
 
-      // Client-side pre-check for a fast, specific error; the RPC re-validates
-      // everything inside one transaction.
-      const { data: holdRow, error: holdError } = await supabase
-        .from("slot_holds")
-        .select("slot_id, expires_at, held_by")
-        .eq("slot_id", input.slotId)
-        .maybeSingle();
-
-      if (holdError) {
-        asNetworkError(holdError);
-      }
-
-      assertValidHold(
-        input.slotId,
-        input.hold,
-        holdRow
-          ? {
-              slotId: holdRow.slot_id as string,
-              expiresAt: holdRow.expires_at as string,
-            }
-          : null,
-        holdRow?.held_by as string | undefined,
-        userId,
-      );
-
-      const payload = await invokeSlotRpc("book_appointment_from_hold", {
-        p_slot_id: input.slotId,
+      // Capacity, duplicates and doctor availability are checked in one
+      // transaction under a lock on the session.
+      const payload = await invokeSchedulingRpc("book_session", {
+        p_session_id: input.sessionId,
         p_beneficiary_id: input.beneficiaryId,
-        p_appointment_type: input.type,
         p_reason: input.reason?.trim() || null,
         p_notes: input.notes?.trim() || null,
-        p_address: input.address?.trim() || null,
       });
 
       if (!payload.appointment_id) {
@@ -79,13 +88,25 @@ export const appointmentsMethods: Pick<
           "The scheduling service could not be reached.",
         );
       }
-
       return mapAppointment(await fetchAppointmentRow(payload.appointment_id));
     } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
+      rethrow(error);
+    }
+  },
+  async moveBooking(appointmentId, newSessionId) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      await assertCanChangeBooking(await fetchAppointmentRow(appointmentId));
+
+      await invokeSchedulingRpc("move_session_booking", {
+        p_appointment_id: appointmentId,
+        p_new_session_id: newSessionId,
+      });
+      return mapAppointment(await fetchAppointmentRow(appointmentId));
+    } catch (error) {
+      rethrow(error);
     }
   },
   async listAppointments(accountHolderId) {
@@ -95,7 +116,7 @@ export const appointmentsMethods: Pick<
     try {
       const { data, error } = await supabase
         .from("appointments")
-        .select("*, appointment_slots(slot_date, start_time, end_time)")
+        .select(APPOINTMENT_SELECT)
         .or(
           `account_holder_id.eq.${accountHolderId},patient_id.eq.${accountHolderId}`,
         )
@@ -105,13 +126,9 @@ export const appointmentsMethods: Pick<
       if (error) {
         asNetworkError(error);
       }
-
       return ((data ?? []) as AppointmentRow[]).map(mapAppointment);
     } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
+      rethrow(error);
     }
   },
   async listDoctorAppointments(doctorId, range) {
@@ -121,7 +138,7 @@ export const appointmentsMethods: Pick<
     try {
       let query = supabase
         .from("appointments")
-        .select("*, appointment_slots(slot_date, start_time, end_time)")
+        .select(APPOINTMENT_SELECT)
         .eq("doctor_id", doctorId);
       if (range) {
         query = query
@@ -130,18 +147,33 @@ export const appointmentsMethods: Pick<
       }
       const { data, error } = await query
         .order("appointment_date", { ascending: true })
-        .order("start_time", { ascending: true });
+        .order("start_time", { ascending: true })
+        .order("created_at", { ascending: true });
 
       if (error) {
         asNetworkError(error);
       }
-
       return ((data ?? []) as AppointmentRow[]).map(mapAppointment);
     } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
+      rethrow(error);
+    }
+  },
+  async listSessionAppointments(sessionId) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      const { data, error } = await supabase
+        .from("appointments")
+        .select(APPOINTMENT_SELECT)
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: true });
+      if (error) {
+        asNetworkError(error);
       }
-      asNetworkError(error);
+      return ((data ?? []) as AppointmentRow[]).map(mapAppointment);
+    } catch (error) {
+      rethrow(error);
     }
   },
   async enrichDoctorAgendaVisits(appointments) {
@@ -149,27 +181,24 @@ export const appointmentsMethods: Pick<
     consumeFailure("NETWORK_ERROR");
 
     const context = new Map<string, DoctorAgendaVisitContext>();
-
     if (appointments.length === 0) {
       return context;
     }
 
-    const holderIds = [
-      ...new Set(appointments.map((row) => row.accountHolderId)),
-    ];
-    const beneficiaryIds = [
-      ...new Set(appointments.map((row) => row.beneficiaryId)),
-    ];
+    const holderIds = [...new Set(appointments.map((row) => row.accountHolderId))];
+    const beneficiaryIds = [...new Set(appointments.map((row) => row.beneficiaryId))];
 
     try {
-      const [{ data: profiles, error: profileError }, { data: beneficiaries, error: benError }] =
-        await Promise.all([
-          supabase.from("profiles").select("id, full_name").in("id", holderIds),
-          supabase
-            .from("beneficiaries")
-            .select("id, display_name, relationship")
-            .in("id", beneficiaryIds),
-        ]);
+      const [
+        { data: profiles, error: profileError },
+        { data: beneficiaries, error: benError },
+      ] = await Promise.all([
+        supabase.from("profiles").select("id, full_name").in("id", holderIds),
+        supabase
+          .from("beneficiaries")
+          .select("id, display_name, relationship")
+          .in("id", beneficiaryIds),
+      ]);
 
       if (profileError) {
         asNetworkError(profileError);
@@ -196,177 +225,106 @@ export const appointmentsMethods: Pick<
         const accountHolderName =
           holderNameById.get(appointment.accountHolderId) ?? "Account holder";
         const relationship = beneficiary?.relationship ?? "self";
-        const beneficiaryName = beneficiary?.displayName ?? accountHolderName;
 
         context.set(appointment.id, {
-          beneficiaryName,
+          beneficiaryName: beneficiary?.displayName ?? accountHolderName,
           accountHolderName,
           relationship,
           proxyTag: doctorProxyTag(accountHolderName, relationship),
         });
       }
-
       return context;
     } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
+      rethrow(error);
     }
   },
-  async confirmDoctorAppointment(appointmentId, input) {
+  async getPatientSummary(appointment) {
     await wait();
     consumeFailure("NETWORK_ERROR");
 
     try {
-      const userId = await getCurrentUserId();
-      const appointment = await fetchAppointmentRow(appointmentId);
+      const [
+        { data: beneficiary, error: benError },
+        { data: holder, error: holderError },
+        { data: previous, error: previousError },
+        { count: noShowCount, error: noShowError },
+      ] = await Promise.all([
+        supabase
+          .from("beneficiaries")
+          .select("display_name, relationship, dob, gender, national_id, hospital_file_id")
+          .eq("id", appointment.beneficiaryId)
+          .maybeSingle(),
+        supabase
+          .from("profiles")
+          .select(
+            "full_name, phone, emergency_contact_name, emergency_contact_phone, blood_type, allergies, medications, medical_conditions, medical_notes",
+          )
+          .eq("id", appointment.accountHolderId)
+          .maybeSingle(),
+        supabase
+          .from("appointments")
+          .select("appointment_date")
+          .eq("doctor_id", appointment.doctorId)
+          .eq("beneficiary_id", appointment.beneficiaryId)
+          .eq("status", "completed")
+          .neq("id", appointment.id)
+          .order("appointment_date", { ascending: false })
+          .limit(5),
+        supabase
+          .from("appointments")
+          .select("id", { count: "exact", head: true })
+          .eq("doctor_id", appointment.doctorId)
+          .eq("beneficiary_id", appointment.beneficiaryId)
+          .eq("status", "no_show"),
+      ]);
 
-      if (appointment.doctor_id !== userId) {
-        throw new SchedulingError(
-          "FORBIDDEN",
-          "You can only confirm visits on your schedule.",
-        );
+      if (benError) {
+        asNetworkError(benError);
       }
-      if (appointment.status === "cancelled" || appointment.status === "completed") {
-        throw new SchedulingError(
-          "INVALID_REQUEST",
-          "This appointment can no longer be confirmed.",
-        );
+      if (holderError) {
+        asNetworkError(holderError);
       }
-      if (appointment.status === "confirmed") {
-        return mapAppointment(appointment);
+      if (previousError) {
+        asNetworkError(previousError);
       }
-
-      const visitType = appointment.appointment_type as AppointmentType;
-      const room = input?.room?.trim();
-      const videoUrl = input?.videoUrl?.trim();
-
-      if (visitType === "in-clinic" && !room) {
-        throw new SchedulingError(
-          "INVALID_REQUEST",
-          "Enter a room before confirming an in-clinic visit.",
-        );
-      }
-      if (visitType === "telehealth" && !videoUrl) {
-        throw new SchedulingError(
-          "INVALID_REQUEST",
-          "Enter a video link before confirming telehealth.",
-        );
-      }
-
-      const { data: updated, error } = await supabase
-        .from("appointments")
-        .update({
-          status: "confirmed",
-          room: visitType === "in-clinic" ? room : appointment.room,
-          video_url: visitType === "telehealth" ? videoUrl : appointment.video_url,
-        })
-        .eq("id", appointmentId)
-        .select("*, appointment_slots(slot_date, start_time, end_time)")
-        .single();
-
-      if (error || !updated) {
-        asNetworkError(error ?? new Error("Confirm failed."));
+      if (noShowError) {
+        asNetworkError(noShowError);
       }
 
-      return mapAppointment(updated as AppointmentRow);
+      const text = (value: unknown) =>
+        typeof value === "string" && value.trim() ? value.trim() : undefined;
+      const relationship =
+        (beneficiary?.relationship as Beneficiary["relationship"] | undefined) ?? "self";
+      const holderName = text(holder?.full_name) ?? "Account holder";
+
+      const summary: PatientSummary = {
+        displayName: text(beneficiary?.display_name) ?? holderName,
+        relationship,
+        dob: text(beneficiary?.dob),
+        gender: text(beneficiary?.gender),
+        nationalId: text(beneficiary?.national_id),
+        hospitalFileId: text(beneficiary?.hospital_file_id),
+        holderName,
+        holderPhone: text(holder?.phone),
+        emergencyContactName: text(holder?.emergency_contact_name),
+        emergencyContactPhone: text(holder?.emergency_contact_phone),
+        previousVisitDates: ((previous ?? []) as { appointment_date: string }[]).map(
+          (row) => row.appointment_date,
+        ),
+        noShowCount: noShowCount ?? 0,
+      };
+      if (relationship === "self") {
+        summary.health = {
+          bloodType: text(holder?.blood_type),
+          allergies: text(holder?.allergies),
+          medications: text(holder?.medications),
+          conditions: text(holder?.medical_conditions),
+          notes: text(holder?.medical_notes),
+        };
+      }
+      return summary;
     } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
-    }
-  },
-  async completeDoctorAppointment(appointmentId) {
-    await wait();
-    consumeFailure("NETWORK_ERROR");
-
-    try {
-      const userId = await getCurrentUserId();
-      const appointment = await fetchAppointmentRow(appointmentId);
-
-      if (appointment.doctor_id !== userId) {
-        throw new SchedulingError(
-          "FORBIDDEN",
-          "You can only complete visits on your schedule.",
-        );
-      }
-      if (appointment.status !== "confirmed") {
-        throw new SchedulingError(
-          "INVALID_REQUEST",
-          "Only confirmed visits can be marked complete.",
-        );
-      }
-
-      const visitDateYmd = appointmentVisitDateYmd(appointment);
-      if (visitDateYmd > todayYmdLocal()) {
-        throw new SchedulingError(
-          "INVALID_REQUEST",
-          "This visit is not ready to complete yet.",
-        );
-      }
-
-      const { data: updated, error } = await supabase
-        .from("appointments")
-        .update({ status: "completed" })
-        .eq("id", appointmentId)
-        .select("*, appointment_slots(slot_date, start_time, end_time)")
-        .single();
-
-      if (error || !updated) {
-        asNetworkError(error ?? new Error("Complete visit failed."));
-      }
-
-      return mapAppointment(updated as AppointmentRow);
-    } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
-    }
-  },
-  async rescheduleAppointment(appointmentId, newSlotId, hold) {
-    await wait();
-    consumeFailure("NETWORK_ERROR");
-
-    try {
-      const userId = await getCurrentUserId();
-      const appointment = await fetchAppointmentRow(appointmentId);
-      assertCanManageAppointment(appointment, userId);
-
-      const { data: holdRow } = await supabase
-        .from("slot_holds")
-        .select("slot_id, expires_at, held_by")
-        .eq("slot_id", newSlotId)
-        .maybeSingle();
-
-      assertValidHold(
-        newSlotId,
-        hold,
-        holdRow
-          ? {
-              slotId: holdRow.slot_id as string,
-              expiresAt: holdRow.expires_at as string,
-            }
-          : null,
-        holdRow?.held_by as string | undefined,
-        userId,
-      );
-
-      // Moves the appointment, books the new slot and frees the old one in a
-      // single transaction.
-      await invokeSlotRpc("reschedule_appointment", {
-        p_appointment_id: appointmentId,
-        p_new_slot_id: newSlotId,
-      });
-
-      return mapAppointment(await fetchAppointmentRow(appointmentId));
-    } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
+      rethrow(error);
     }
   },
   async cancelAppointment(appointmentId) {
@@ -374,23 +332,15 @@ export const appointmentsMethods: Pick<
     consumeFailure("NETWORK_ERROR");
 
     try {
-      const userId = await getCurrentUserId();
-      assertCanManageAppointment(
-        await fetchAppointmentRow(appointmentId),
-        userId,
-      );
+      await assertCanChangeBooking(await fetchAppointmentRow(appointmentId));
 
-      // Cancels and frees the slot in a single transaction.
-      await invokeSlotRpc("cancel_appointment", {
+      // Frees the place in the session (capacity is a live count).
+      await invokeSchedulingRpc("cancel_appointment", {
         p_appointment_id: appointmentId,
       });
-
       return mapAppointment(await fetchAppointmentRow(appointmentId));
     } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
+      rethrow(error);
     }
   },
   async listAppointmentsPage({ filter, todayYmd, offset, limit }) {
@@ -400,19 +350,27 @@ export const appointmentsMethods: Pick<
     try {
       let query = supabase
         .from("appointments")
-        .select(
-          "*, appointment_slots(slot_date, start_time, end_time), doctor:doctors(profile:profiles(full_name))",
-        );
-      if (filter === "pending" || filter === "confirmed") {
-        query = query.eq("status", filter);
-      } else if (filter === "today") {
+        .select(`${APPOINTMENT_SELECT}, doctor:doctors(profile:profiles(full_name))`);
+      if (filter === "today") {
         query = query.eq("appointment_date", todayYmd);
+      } else if (filter === "upcoming") {
+        query = query
+          .gte("appointment_date", todayYmd)
+          .in("status", ["pending", "confirmed"]);
+      } else if (filter === "missed") {
+        query = query.eq("status", "no_show");
+      } else if (filter === "cancelled") {
+        query = query.eq("status", "cancelled");
       }
 
-      // Fetch one extra row to know whether another page exists.
+      // Fetch one extra row to know whether another page exists. Every visit
+      // in a session shares its date and start time, so id breaks ties:
+      // without it, offset paging can repeat or skip rows between pages.
+      const ascending = filter === "upcoming";
       const { data, error } = await query
-        .order("appointment_date", { ascending: false })
-        .order("start_time", { ascending: false })
+        .order("appointment_date", { ascending })
+        .order("start_time", { ascending })
+        .order("id", { ascending })
         .range(offset, offset + limit);
 
       if (error) {
@@ -432,33 +390,7 @@ export const appointmentsMethods: Pick<
       });
       return { items, hasMore: rows.length > limit };
     } catch (error) {
-      if (error instanceof SchedulingError) {
-        throw error;
-      }
-      asNetworkError(error);
+      rethrow(error);
     }
   },
 };
-
-export function isAppointmentUpcoming(status: string): boolean {
-  return status === "pending" || status === "confirmed" || status === "upcoming";
-}
-
-export function appointmentEndsAt(row: AppointmentRow, slot?: SlotRow): string {
-  if (slot) {
-    const endTime =
-      slot.end_time.length === 5 ? `${slot.end_time}:00` : slot.end_time;
-    return parseISO(`${slot.slot_date}T${endTime}`).toISOString();
-  }
-  const duration = 30;
-  const start =
-    row.start_time.length === 5 ? `${row.start_time}:00` : row.start_time;
-  return addMinutes(
-    parseISO(`${row.appointment_date}T${start}`),
-    duration,
-  ).toISOString();
-}
-
-export function isBeforeNow(iso: string): boolean {
-  return isBefore(parseISO(iso), new Date());
-}

@@ -3,16 +3,17 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
 import { Link, router, Stack } from "expo-router";
 
+import { PageScrollView } from "@/components/ui/page-scroll-view";
 import { goBack } from "@/components/legal/legal-page";
 import { Card } from "@/components/ui/card";
 import { FormTextInput } from "@/components/ui/form-text-input";
-import { hospitalInfo } from "@/lib/hospital-info";
+import { contactSentence, DEFAULT_HOSPITAL_INFO } from "@/lib/hospital-info";
+import { useHospitalInfo } from "@/lib/queries/hospital-info";
 import { AccountError, accountsService } from "@/lib/services/accounts";
 import { useBookingStore } from "@/lib/stores/booking";
 import { usePatientBookingPrefs } from "@/lib/stores/patient-booking-prefs";
@@ -25,7 +26,7 @@ const deletedData = [
   "Your profile: name, date of birth, gender, phone, address and emergency contact",
   "Health details you added: blood type, allergies, medications, conditions and notes",
   "Family members you added",
-  "Your appointment history, past and upcoming",
+  "Your appointment history, past and upcoming, and any waitlist places",
   "Notification settings, device tokens and the record of notifications sent to you",
 ];
 
@@ -63,6 +64,8 @@ export default function DeleteAccountScreen() {
   const authReady = useSessionStore((state) => state.authReady);
   const hasHydrated = useSessionStore((state) => state.hasHydrated);
   const session = useSessionStore((state) => state.session);
+  const { data: hospitalInfo = DEFAULT_HOSPITAL_INFO } = useHospitalInfo();
+  const contact = contactSentence(hospitalInfo);
   const [confirmText, setConfirmText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -148,8 +151,9 @@ export default function DeleteAccountScreen() {
             </Pressable>
           </Link>
           <Text className="text-sm leading-5 text-ink-muted">
-            Can&apos;t sign in? Email {hospitalInfo.email} from the address on your
-            account and we&apos;ll delete it for you.
+            {hospitalInfo.email
+              ? `Can't sign in? Email ${hospitalInfo.email} from the address on your account and we'll delete it for you.`
+              : `Can't sign in? To have your account deleted, ${contact}.`}
           </Text>
         </Card>
       );
@@ -162,7 +166,7 @@ export default function DeleteAccountScreen() {
           <Text className="text-base leading-6 text-ink">
             Doctor and administrator accounts are managed by the hospital, because
             they are linked to other patients&apos; appointments. Ask an
-            administrator to remove your account, or email {hospitalInfo.email}.
+            administrator to remove your account, or {contact}.
           </Text>
         </Card>
       );
@@ -218,7 +222,7 @@ export default function DeleteAccountScreen() {
   return (
     <>
       <Stack.Screen options={{ title: "Delete account · FAME Hospital Booking" }} />
-      <ScrollView
+      <PageScrollView
         className="flex-1 bg-surface-muted"
         contentContainerClassName="items-center px-4 py-10"
         contentInsetAdjustmentBehavior="automatic"
@@ -255,8 +259,8 @@ export default function DeleteAccountScreen() {
 
           <Section title="Upcoming visits">
             <Text className="text-base leading-7 text-ink">
-              Any upcoming visits are cancelled first, and the doctor is notified
-              so the time can be offered to someone else.
+              Any upcoming visits are cancelled first, so your places can be
+              offered to other patients.
             </Text>
           </Section>
 
@@ -264,7 +268,7 @@ export default function DeleteAccountScreen() {
             <Text className="text-base leading-7 text-ink">
               This deletes your data from the booking app. It doesn&apos;t change
               medical records the hospital keeps in its own systems; to ask about
-              those, email {hospitalInfo.email}.
+              those, {contact}.
             </Text>
           </Section>
 
@@ -276,7 +280,7 @@ export default function DeleteAccountScreen() {
             Read our Privacy Policy
           </Link>
         </View>
-      </ScrollView>
+      </PageScrollView>
     </>
   );
 }

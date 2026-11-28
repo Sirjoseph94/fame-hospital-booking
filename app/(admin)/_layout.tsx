@@ -1,5 +1,11 @@
 import { View } from "react-native";
-import { CalendarRange, ChartNoAxesColumn, UsersRound } from "lucide-react-native";
+import {
+  CalendarRange,
+  Contact,
+  Ellipsis,
+  Hospital,
+  UsersRound,
+} from "lucide-react-native";
 import { Tabs } from "expo-router";
 
 import { AdminSideNav } from "@/components/admin/admin-side-nav";
@@ -17,10 +23,10 @@ export default function AdminLayout() {
         {isWide ? <AdminSideNav /> : null}
         <View className="min-w-0 flex-1">
           <Tabs
+            backBehavior="history"
             screenOptions={{
               headerShown: false,
               tabBarStyle: isWide ? { display: "none" } : undefined,
-              tabBarActiveTintColor: undefined,
             }}
           >
             <Tabs.Screen
@@ -44,13 +50,34 @@ export default function AdminLayout() {
             <Tabs.Screen
               name="capacity"
               options={{
-                title: "Capacity",
+                title: "Clinics",
                 tabBarIcon: ({ color, size }) => (
-                  <ChartNoAxesColumn color={color} size={size} />
+                  <Hospital color={color} size={size} />
                 ),
               }}
             />
-            <Tabs.Screen name="doctor" options={{ href: null }} />
+            <Tabs.Screen
+              name="patients"
+              options={{
+                title: "Patients",
+                tabBarIcon: ({ color, size }) => <Contact color={color} size={size} />,
+              }}
+            />
+            <Tabs.Screen
+              name="more"
+              options={{
+                title: "More",
+                tabBarIcon: ({ color, size }) => <Ellipsis color={color} size={size} />,
+              }}
+            />
+            {/* Reached from "More" on phones and from the side nav on wide screens. */}
+            <Tabs.Screen name="reports" options={{ href: null, title: "Reports" }} />
+            <Tabs.Screen name="activity" options={{ href: null, title: "Activity" }} />
+            <Tabs.Screen name="settings" options={{ href: null, title: "Settings" }} />
+            {/* Detail stacks reset when left, so "back" never shows an older detail. */}
+            <Tabs.Screen name="doctor" options={{ href: null, popToTopOnBlur: true }} />
+            <Tabs.Screen name="patient" options={{ href: null, popToTopOnBlur: true }} />
+            <Tabs.Screen name="session" options={{ href: null, popToTopOnBlur: true }} />
           </Tabs>
         </View>
       </View>

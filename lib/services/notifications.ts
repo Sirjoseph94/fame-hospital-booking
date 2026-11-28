@@ -29,10 +29,6 @@ export function setCachedPushToken(token: string | null) {
   cachedPushToken = token;
 }
 
-export function getCachedPushToken(): string | null {
-  return cachedPushToken;
-}
-
 export const notificationsService = {
   async getNotificationPreferences(
     userId: string,

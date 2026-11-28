@@ -1,6 +1,7 @@
 import { Link, router, Stack } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
+import { PageScrollView } from "@/components/ui/page-scroll-view";
 import type { LegalBlock, LegalDocument } from "@/lib/legal/types";
 
 const otherDocument = {
@@ -51,7 +52,7 @@ export function LegalPage({ document, path }: LegalPageProps) {
   return (
     <>
       <Stack.Screen options={{ title: `${document.title} · FAME Hospital Booking` }} />
-      <ScrollView
+      <PageScrollView
         className="flex-1 bg-surface-muted"
         contentContainerClassName="items-center px-4 py-10"
         contentInsetAdjustmentBehavior="automatic"
@@ -98,7 +99,7 @@ export function LegalPage({ document, path }: LegalPageProps) {
             </Link>
           </View>
         </View>
-      </ScrollView>
+      </PageScrollView>
     </>
   );
 }

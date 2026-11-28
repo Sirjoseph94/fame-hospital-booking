@@ -1,4 +1,5 @@
-import { focusManager, QueryClient } from "@tanstack/react-query";
+import { focusManager, onlineManager, QueryClient } from "@tanstack/react-query";
+import { addNetworkStateListener } from "expo-network";
 import { AppState, Platform } from "react-native";
 
 import { SchedulingError } from "@/lib/services/scheduling";
@@ -14,7 +15,7 @@ function isRetryable(error: unknown): boolean {
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Scheduling data changes often (other patients book slots), so keep
+      // Scheduling data changes often (other patients book places), so keep
       // this short; screens also refresh stale data when they regain focus.
       staleTime: 30_000,
       gcTime: 10 * 60_000,
@@ -31,5 +32,16 @@ export const queryClient = new QueryClient({
 if (Platform.OS !== "web") {
   AppState.addEventListener("change", (status) => {
     focusManager.setFocused(status === "active");
+  });
+}
+
+// React Query pauses fetches while offline and resumes them on reconnect. The
+// browser reports this itself; on iOS/Android it comes from expo-network.
+if (Platform.OS !== "web") {
+  onlineManager.setEventListener((setOnline) => {
+    const subscription = addNetworkStateListener((state) => {
+      setOnline(state.isConnected !== false);
+    });
+    return () => subscription.remove();
   });
 }
