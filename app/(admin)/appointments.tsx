@@ -39,6 +39,7 @@ const filters: { id: AppointmentFilter; label: string }[] = [
   { id: "all", label: "All" },
   { id: "today", label: "Today" },
   { id: "upcoming", label: "Upcoming" },
+  { id: "missed", label: "No-shows" },
   { id: "cancelled", label: "Cancelled" },
 ];
 
@@ -188,6 +189,8 @@ export default function AdminAppointmentsScreen() {
                           appointment.dbStatus,
                           "admin",
                           appointment.startsAt,
+                          new Date(now),
+                          appointment,
                         )}
                       </Text>
                     </View>

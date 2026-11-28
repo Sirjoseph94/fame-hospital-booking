@@ -8,6 +8,7 @@ import { format } from "date-fns";
 
 import type { DoctorAgendaVisit } from "@/lib/doctor-agenda-helpers";
 import { invalidateScheduling, queryKeys } from "@/lib/query/keys";
+import { QUEUE_REFRESH_MS } from "@/lib/queries/visit-flow";
 import {
   schedulingService,
   type AppointmentListFilter,
@@ -29,10 +30,13 @@ export function useDoctorAgenda(
   doctorId: string | undefined,
   fromYmd: string,
   toYmd: string,
+  options: { live?: boolean } = {},
 ) {
   return useQuery({
     queryKey: queryKeys.appointments.doctorRange(doctorId ?? "", fromYmd, toYmd),
     enabled: Boolean(doctorId),
+    // Arrivals come in from patients' phones: poll while today is on screen.
+    refetchInterval: options.live ? QUEUE_REFRESH_MS : false,
     queryFn: async (): Promise<DoctorAgendaVisit[]> => {
       const appointments = await schedulingService.listDoctorAppointments(
         doctorId!,
@@ -148,15 +152,6 @@ export function useCancelAppointment() {
   return useMutation({
     mutationFn: (appointmentId: string) =>
       schedulingService.cancelAppointment(appointmentId),
-    onSettled: () => invalidateScheduling(queryClient),
-  });
-}
-
-export function useCompleteDoctorAppointment() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (appointmentId: string) =>
-      schedulingService.completeDoctorAppointment(appointmentId),
     onSettled: () => invalidateScheduling(queryClient),
   });
 }

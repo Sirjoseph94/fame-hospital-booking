@@ -48,7 +48,10 @@ export function MoveSessionSheet({
 
   const rows = sessionsQuery.data;
   const sections = useMemo(
-    () => groupSessionsByDate((rows ?? []).filter((row) => row.id !== currentSessionId)),
+    () =>
+      groupSessionsByDate(
+        (rows ?? []).filter((row) => row.id !== currentSessionId && row.isBookable),
+      ),
     [currentSessionId, rows],
   );
 

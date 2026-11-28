@@ -1,61 +1,37 @@
 import { useMemo, useState } from "react";
-import {
-  AccessibilityInfo,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
-import {
-  addDays,
-  endOfWeek,
-  format,
-  startOfDay,
-  startOfWeek,
-  subDays,
-} from "date-fns";
+import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { addDays, endOfWeek, format, startOfDay, startOfWeek, subDays } from "date-fns";
 import { router } from "expo-router";
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
 
-import { DoctorVisitCard } from "@/components/doctor/doctor-visit-card";
+import { SessionProgressChips } from "@/components/admin/session-progress-chips";
+import { SessionQueue } from "@/components/doctor/session-queue";
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
-import {
-  ScreenLoadingSkeleton,
-  VisitListSkeleton,
-} from "@/components/ui/skeleton";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
-import { confirmAsync, showAlert } from "@/lib/confirm";
+import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
+import { ScreenLoadingSkeleton, VisitListSkeleton } from "@/components/ui/skeleton";
 import { useHasLoadedOnce } from "@/lib/hooks/use-has-loaded-once";
 import { useNow } from "@/lib/hooks/use-now";
 import {
-  canDoctorMarkVisitComplete,
   filterVisitsForDay,
   formatAgendaDayLabel,
   groupVisitsBySession,
   type AgendaSessionGroup,
-  type DoctorAgendaVisit,
 } from "@/lib/doctor-agenda-helpers";
-import {
-  useCancelAppointment,
-  useCompleteDoctorAppointment,
-  useDoctorAgenda,
-} from "@/lib/queries/appointments";
+import { useDoctorAgenda } from "@/lib/queries/appointments";
 import { useDoctorSessions } from "@/lib/queries/sessions";
 import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { SchedulingError } from "@/lib/services/scheduling";
+import { buildQueueSections } from "@/lib/session-queue";
 import { formatSessionTimes } from "@/lib/session-groups";
 import { useSessionStore } from "@/lib/stores/session";
 import { colors } from "@/lib/theme-colors";
 
 function errorMessage(cause: unknown): string {
-  return cause instanceof SchedulingError
-    ? cause.message
-    : "Could not load your agenda.";
+  return cause instanceof SchedulingError ? cause.message : "Could not load your agenda.";
 }
 
 export default function DoctorAgendaScreen() {
@@ -65,18 +41,17 @@ export default function DoctorAgendaScreen() {
   const [userRefreshing, setUserRefreshing] = useState(false);
   const [actionBanner, setActionBanner] = useState<string | null>(null);
 
-  // "Mark seen" unlocks when a session starts.
+  // Actions (arrive, no-show) unlock as sessions open and start.
   useNow(60_000);
 
   // One week per request: moving between days in the same week needs no fetch.
   const weekFromYmd = format(startOfWeek(selectedDay, { weekStartsOn: 1 }), "yyyy-MM-dd");
   const weekToYmd = format(endOfWeek(selectedDay, { weekStartsOn: 1 }), "yyyy-MM-dd");
   const dayYmd = format(selectedDay, "yyyy-MM-dd");
+  const isToday = dayYmd === format(new Date(), "yyyy-MM-dd");
 
-  const agendaQuery = useDoctorAgenda(userId, weekFromYmd, weekToYmd);
+  const agendaQuery = useDoctorAgenda(userId, weekFromYmd, weekToYmd, { live: isToday });
   const sessionsQuery = useDoctorSessions(userId, weekFromYmd, weekToYmd);
-  const completeMutation = useCompleteDoctorAppointment();
-  const cancelMutation = useCancelAppointment();
 
   useRefreshOnFocus([
     queryKeys.appointments.doctorRange(userId ?? "", weekFromYmd, weekToYmd),
@@ -106,12 +81,6 @@ export default function DoctorAgendaScreen() {
     }
   };
 
-  const manageBusyId = completeMutation.isPending
-    ? completeMutation.variables
-    : cancelMutation.isPending
-      ? cancelMutation.variables
-      : null;
-
   const groups = useMemo(
     () =>
       groupVisitsBySession(
@@ -121,58 +90,11 @@ export default function DoctorAgendaScreen() {
     [dayYmd, selectedDay, sessions, visits],
   );
 
-  const isToday = dayYmd === format(new Date(), "yyyy-MM-dd");
   const bookedToday = groups.reduce((sum, group) => sum + group.visits.length, 0);
 
   const shiftDay = (delta: number) => {
+    setActionBanner(null);
     setSelectedDay((current) => (delta < 0 ? subDays(current, 1) : addDays(current, 1)));
-  };
-
-  const markSeen = async (visit: DoctorAgendaVisit) => {
-    const confirmed = await confirmAsync({
-      title: `Mark ${visit.beneficiaryName} seen?`,
-      message: "The patient will see this visit as completed.",
-      confirmText: "Mark seen",
-      cancelText: "Not yet",
-    });
-    if (!confirmed) {
-      return;
-    }
-    setActionBanner(null);
-    try {
-      await completeMutation.mutateAsync(visit.id);
-      setActionBanner(`${visit.beneficiaryName} marked seen.`);
-      AccessibilityInfo.announceForAccessibility("Visit marked complete.");
-    } catch (cause) {
-      showAlert(
-        "Could not update visit",
-        cause instanceof SchedulingError ? cause.message : "Could not mark the visit complete.",
-      );
-    }
-  };
-
-  const cancelBooking = async (visit: DoctorAgendaVisit) => {
-    const confirmed = await confirmAsync({
-      title: "Cancel this booking?",
-      message: `${visit.beneficiaryName} will be notified and their place released.`,
-      confirmText: "Cancel booking",
-      cancelText: "Keep booking",
-      destructive: true,
-    });
-    if (!confirmed) {
-      return;
-    }
-    setActionBanner(null);
-    try {
-      await cancelMutation.mutateAsync(visit.id);
-      setActionBanner("Booking cancelled.");
-      AccessibilityInfo.announceForAccessibility("Booking cancelled.");
-    } catch (cause) {
-      showAlert(
-        "Cancel failed",
-        cause instanceof SchedulingError ? cause.message : "Could not cancel the booking.",
-      );
-    }
   };
 
   const renderGroup = (group: AgendaSessionGroup, index: number) => {
@@ -180,10 +102,19 @@ export default function DoctorAgendaScreen() {
     const cancelled = sessionInfo?.status === "cancelled";
     const title = sessionInfo ? formatSessionTimes(sessionInfo) : "Other bookings";
     const key = sessionInfo?.id ?? `unattached-${index}`;
+    const sections = buildQueueSections(group.visits);
+    const progress = {
+      waiting: sections.waiting.length,
+      withDoctor: sections.withDoctor.length,
+      notArrived: sections.notArrived.length,
+      seen: sections.done.filter((visit) => visit.status === "completed").length,
+      noShow: sections.done.filter((visit) => visit.status === "missed").length,
+    };
+    const anyArrived = progress.waiting + progress.withDoctor + progress.seen > 0;
 
     return (
       <View key={key} className="gap-3">
-        <Card style={{ gap: 4 }}>
+        <Card style={{ gap: 8 }}>
           <View className="flex-row items-center justify-between gap-3">
             <Text accessibilityRole="header" className="text-base font-semibold text-ink">
               {title}
@@ -205,8 +136,17 @@ export default function DoctorAgendaScreen() {
             </Text>
           ) : null}
           {!cancelled && group.visits.length > 0 ? (
+            isToday || anyArrived ? (
+              <SessionProgressChips progress={progress} />
+            ) : (
+              <Text className="text-sm text-ink-muted">
+                Patients check in at reception on the day and are seen in order of arrival.
+              </Text>
+            )
+          ) : null}
+          {sessionInfo && !cancelled && sessionInfo.waitlistCount > 0 ? (
             <Text className="text-sm text-ink-muted">
-              Listed in booking order. Patients are seen in order of arrival.
+              {sessionInfo.waitlistCount} on the waitlist. They&apos;re booked automatically if a place frees up.
             </Text>
           ) : null}
         </Card>
@@ -215,37 +155,34 @@ export default function DoctorAgendaScreen() {
           <Text className="px-1 text-sm text-ink-muted">No bookings yet.</Text>
         ) : null}
 
-        {group.visits.map((visit, position) => {
-          const canManage = visit.status === "upcoming";
-          return (
-            <DoctorVisitCard
-              key={visit.id}
-              appointment={visit}
-              beneficiaryName={visit.beneficiaryName}
-              dbStatus={visit.dbStatus}
-              manageBusy={manageBusyId === visit.id}
-              notes={visit.notes}
-              position={position + 1}
-              proxyTag={visit.proxyTag}
-              reason={visit.reason}
-              startsAt={visit.startsAt}
-              status={visit.status}
-              onCancel={canManage ? () => void cancelBooking(visit) : undefined}
-              onMarkComplete={
-                canManage &&
-                visit.dbStatus === "confirmed" &&
-                canDoctorMarkVisitComplete(visit.startsAt)
-                  ? () => void markSeen(visit)
-                  : undefined
-              }
-            />
-          );
-        })}
+        {sessionInfo && group.visits.length > 0 ? (
+          <SessionQueue
+            audience="doctor"
+            session={sessionInfo}
+            visits={group.visits}
+            onMessage={setActionBanner}
+          />
+        ) : null}
+
+        {!sessionInfo && group.visits.length > 0 && userId ? (
+          <SessionQueue
+            legacy
+            audience="doctor"
+            session={{
+              id: `legacy-${dayYmd}`,
+              doctorId: userId,
+              startsAt: group.visits[0]!.startsAt,
+              endsAt: group.visits[group.visits.length - 1]!.endsAt,
+              status: "scheduled",
+            }}
+            visits={group.visits}
+            onMessage={setActionBanner}
+          />
+        ) : null}
 
         {group.cancelled.length > 0 ? (
           <Text className="px-1 text-sm text-ink-muted">
-            {group.cancelled.length} cancelled{" "}
-            {group.cancelled.length === 1 ? "booking" : "bookings"}:{" "}
+            {group.cancelled.length} cancelled {group.cancelled.length === 1 ? "booking" : "bookings"}:{" "}
             {group.cancelled.map((visit) => visit.beneficiaryName).join(", ")}
           </Text>
         ) : null}
@@ -261,26 +198,38 @@ export default function DoctorAgendaScreen() {
         <Pressable
           accessibilityLabel="Previous day"
           accessibilityRole="button"
-          className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface"
+          className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface active:opacity-70"
           onPress={() => shiftDay(-1)}
         >
           <ChevronLeft color={colors.ink} size={24} />
         </Pressable>
         <View className="items-center">
-          <Text className="text-base font-semibold text-ink">
-            {formatAgendaDayLabel(selectedDay)}
-          </Text>
-          <Text className="text-sm text-ink-muted">
-            {isToday ? "Today" : dayYmd}
-            {!weekLoading && groups.length > 0
-              ? ` · ${bookedToday} ${bookedToday === 1 ? "patient" : "patients"} booked`
-              : ""}
-          </Text>
+          <Text className="text-base font-semibold text-ink">{formatAgendaDayLabel(selectedDay)}</Text>
+          {isToday ? (
+            <Text className="text-sm text-ink-muted">
+              Today
+              {!weekLoading && groups.length > 0
+                ? ` · ${bookedToday} ${bookedToday === 1 ? "patient" : "patients"}`
+                : ""}
+            </Text>
+          ) : (
+            <Pressable
+              accessibilityLabel="Go to today"
+              accessibilityRole="button"
+              className="min-h-11 justify-center px-2"
+              onPress={() => {
+                setActionBanner(null);
+                setSelectedDay(startOfDay(new Date()));
+              }}
+            >
+              <Text className="text-sm font-semibold text-primary">Back to today</Text>
+            </Pressable>
+          )}
         </View>
         <Pressable
           accessibilityLabel="Next day"
           accessibilityRole="button"
-          className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface"
+          className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface active:opacity-70"
           onPress={() => shiftDay(1)}
         >
           <ChevronRight color={colors.ink} size={24} />
@@ -293,17 +242,11 @@ export default function DoctorAgendaScreen() {
         </Text>
       ) : null}
 
-      <RefreshErrorNotice
-        className="px-4 pb-2"
-        message={refreshError ? errorMessage(refreshError) : null}
-      />
+      <RefreshErrorNotice className="px-4 pb-2" message={refreshError ? errorMessage(refreshError) : null} />
 
       {blockingError ? (
         <View className="flex-1 justify-center px-4">
-          <SchedulingStatePanel
-            message={errorMessage(blockingError)}
-            onRetry={() => void refetchAll()}
-          />
+          <SchedulingStatePanel message={errorMessage(blockingError)} onRetry={() => void refetchAll()} />
         </View>
       ) : initialLoading ? (
         <ScreenLoadingSkeleton>
@@ -313,9 +256,7 @@ export default function DoctorAgendaScreen() {
         <ScrollView
           contentContainerClassName="gap-5 px-4 pb-8"
           contentInsetAdjustmentBehavior="automatic"
-          refreshControl={
-            <RefreshControl refreshing={userRefreshing} onRefresh={() => void refresh()} />
-          }
+          refreshControl={<RefreshControl refreshing={userRefreshing} onRefresh={() => void refresh()} />}
         >
           {weekLoading ? (
             <VisitListSkeleton count={3} />

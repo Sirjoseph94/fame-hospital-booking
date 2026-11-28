@@ -85,11 +85,68 @@ export type SchedulingRpcPayload = {
   removed?: boolean;
   cancelled_bookings?: number;
   booked?: number;
+  queue_number?: number;
+  position?: number | null;
+  already?: boolean;
+  entry_id?: string;
+  opens_at?: string;
 };
 
+/** "9:30 AM" (today) or "Tue 9:30 AM" for a hospital-local timestamp. */
+function formatOpensAt(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  // A zone-less "yyyy-MM-ddTHH:mm:ss" is read as local (hospital) time.
+  const date = new Date(value.replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return date.toLocaleString(undefined, {
+    weekday: sameDay ? undefined : "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 /** Error for a `{ success: false, code }` response from a scheduling RPC. */
-export function schedulingErrorFromRpc(code: string | undefined): SchedulingError {
+export function schedulingErrorFromRpc(
+  code: string | undefined,
+  payload: SchedulingRpcPayload = {},
+): SchedulingError {
   switch (code) {
+    case "WRONG_CODE":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "That isn't the check-in code shown at reception. Check it and try again.",
+      );
+    case "CHECK_IN_NOT_OPEN": {
+      const opens = formatOpensAt(payload.opens_at);
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        opens ? `Check-in opens at ${opens}.` : "Check-in isn't open yet for this session.",
+      );
+    }
+    case "CHECK_IN_CLOSED":
+      return new SchedulingError("INVALID_REQUEST", "This session has ended, so check-in is closed.");
+    case "NOT_ARRIVED":
+      return new SchedulingError("INVALID_REQUEST", "Mark the patient as arrived before calling them in.");
+    case "TOO_EARLY":
+      return new SchedulingError("INVALID_REQUEST", "This can be recorded once the session has started.");
+    case "QUEUE_EMPTY":
+      return new SchedulingError("INVALID_REQUEST", "Nobody is waiting yet.");
+    case "OUTSIDE_BOOKING_WINDOW":
+      return new SchedulingError(
+        "INVALID_REQUEST",
+        "That session is too far ahead to book yet. Choose an earlier session.",
+      );
+    case "SESSION_HAS_PLACES":
+      return new SchedulingError("INVALID_REQUEST", "This session has places left, so you can book it directly.");
+    case "ALREADY_WAITING":
+      return new SchedulingError("INVALID_REQUEST", "This person is already on the waitlist for that session.");
+    case "WAITLIST_DISABLED":
+      return new SchedulingError("INVALID_REQUEST", "The waitlist isn't available right now.");
     case "SESSION_FULL":
       return new SchedulingError(
         "SESSION_UNAVAILABLE",
@@ -167,7 +224,14 @@ export async function invokeSchedulingRpc(
     | "create_clinic_sessions"
     | "update_clinic_session"
     | "cancel_clinic_session"
-    | "remove_beneficiary",
+    | "remove_beneficiary"
+    | "check_in_visit"
+    | "advance_visit"
+    | "call_next_in_queue"
+    | "get_queue_status"
+    | "book_follow_up"
+    | "join_waitlist"
+    | "leave_waitlist",
   args: Record<string, unknown> = {},
 ): Promise<SchedulingRpcPayload> {
   const { data, error } = await supabase.rpc(fn, args);
@@ -177,7 +241,7 @@ export async function invokeSchedulingRpc(
   const payload =
     data && typeof data === "object" ? (data as SchedulingRpcPayload) : {};
   if (payload.success === false) {
-    throw schedulingErrorFromRpc(payload.code);
+    throw schedulingErrorFromRpc(payload.code, payload);
   }
   return payload;
 }

@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { ScreenLoadingSkeleton, VisitListSkeleton } from "@/components/ui/skeleton";
+import { useAdminBack } from "@/lib/hooks/use-admin-back";
 import { useAuditLog } from "@/lib/queries/audit";
 import { useFailedDeliveries } from "@/lib/queries/deliveries";
 import { queryKeys } from "@/lib/query/keys";
@@ -19,11 +20,12 @@ function errorText(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Could not load the activity log.";
 }
 
-/** Admin: failed messages, and who changed what (invites, account activation). */
+/** Admin: failed messages, and who changed what (invites, accounts, settings). */
 export default function AdminActivityScreen() {
   const auditQuery = useAuditLog();
   const failedQuery = useFailedDeliveries();
   const [userRefreshing, setUserRefreshing] = useState(false);
+  const onBack = useAdminBack();
   useRefreshOnFocus([queryKeys.auditLog, queryKeys.failedDeliveries]);
 
   const entries = auditQuery.data;
@@ -39,7 +41,7 @@ export default function AdminActivityScreen() {
 
   return (
     <View className="flex-1 bg-surface-muted">
-      <ShellHeader title="Activity" />
+      <ShellHeader onBack={onBack} title="Activity" />
       {auditQuery.isPending ? (
         <ScreenLoadingSkeleton>
           <VisitListSkeleton count={4} />
@@ -67,8 +69,8 @@ export default function AdminActivityScreen() {
             Admin changes
           </Text>
           <Text className="text-sm text-ink-muted">
-            Changes made by administrators: doctor invites and account activation.
-            Latest 100.
+            Changes made by administrators: doctor invites, account activation,
+            hospital details and settings. Latest 100.
           </Text>
           {!entries || entries.length === 0 ? (
             <EmptyState message="No admin activity yet." />

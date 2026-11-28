@@ -18,6 +18,8 @@ const session = (id: string, dateYmd: string, start: string, end: string): Clini
   placesLeft: 10,
   status: "scheduled",
   isBookable: true,
+  inBookingWindow: true,
+  waitlistCount: 0,
 });
 
 describe("groupSessionsByDate", () => {

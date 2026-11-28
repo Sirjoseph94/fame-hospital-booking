@@ -1,7 +1,5 @@
 // Appointments: booking into sessions, moving, cancelling, and doctor actions.
 
-import { parseISO } from "date-fns";
-
 import { doctorProxyTag } from "@/lib/doctor-agenda-helpers";
 import { supabase } from "@/lib/supabase";
 import type { Beneficiary, PatientSummary } from "@/types/scheduling";
@@ -56,8 +54,8 @@ export const appointmentsMethods: Pick<
   | "moveBooking"
   | "listAppointments"
   | "listDoctorAppointments"
+  | "listSessionAppointments"
   | "enrichDoctorAgendaVisits"
-  | "completeDoctorAppointment"
   | "getPatientSummary"
   | "cancelAppointment"
   | "listAppointmentsPage"
@@ -160,6 +158,24 @@ export const appointmentsMethods: Pick<
       rethrow(error);
     }
   },
+  async listSessionAppointments(sessionId) {
+    await wait();
+    consumeFailure("NETWORK_ERROR");
+
+    try {
+      const { data, error } = await supabase
+        .from("appointments")
+        .select(APPOINTMENT_SELECT)
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: true });
+      if (error) {
+        asNetworkError(error);
+      }
+      return ((data ?? []) as AppointmentRow[]).map(mapAppointment);
+    } catch (error) {
+      rethrow(error);
+    }
+  },
   async enrichDoctorAgendaVisits(appointments) {
     await wait();
     consumeFailure("NETWORK_ERROR");
@@ -222,49 +238,6 @@ export const appointmentsMethods: Pick<
       rethrow(error);
     }
   },
-  async completeDoctorAppointment(appointmentId) {
-    await wait();
-    consumeFailure("NETWORK_ERROR");
-
-    try {
-      const userId = await getCurrentUserId();
-      const row = await fetchAppointmentRow(appointmentId);
-
-      if (row.doctor_id !== userId) {
-        throw new SchedulingError(
-          "FORBIDDEN",
-          "You can only complete visits on your schedule.",
-        );
-      }
-      if (row.status !== "confirmed") {
-        throw new SchedulingError(
-          "INVALID_REQUEST",
-          "Only booked visits can be marked complete.",
-        );
-      }
-      const startsAt = mapAppointment(row).startsAt;
-      if (!startsAt || parseISO(startsAt).getTime() > Date.now()) {
-        throw new SchedulingError(
-          "INVALID_REQUEST",
-          "This visit can be completed once its session has started.",
-        );
-      }
-
-      const { data: updated, error } = await supabase
-        .from("appointments")
-        .update({ status: "completed" })
-        .eq("id", appointmentId)
-        .select(APPOINTMENT_SELECT)
-        .single();
-
-      if (error || !updated) {
-        asNetworkError(error ?? new Error("Complete visit failed."));
-      }
-      return mapAppointment(updated as AppointmentRow);
-    } catch (error) {
-      rethrow(error);
-    }
-  },
   async getPatientSummary(appointment) {
     await wait();
     consumeFailure("NETWORK_ERROR");
@@ -274,6 +247,7 @@ export const appointmentsMethods: Pick<
         { data: beneficiary, error: benError },
         { data: holder, error: holderError },
         { data: previous, error: previousError },
+        { count: noShowCount, error: noShowError },
       ] = await Promise.all([
         supabase
           .from("beneficiaries")
@@ -296,6 +270,12 @@ export const appointmentsMethods: Pick<
           .neq("id", appointment.id)
           .order("appointment_date", { ascending: false })
           .limit(5),
+        supabase
+          .from("appointments")
+          .select("id", { count: "exact", head: true })
+          .eq("doctor_id", appointment.doctorId)
+          .eq("beneficiary_id", appointment.beneficiaryId)
+          .eq("status", "no_show"),
       ]);
 
       if (benError) {
@@ -306,6 +286,9 @@ export const appointmentsMethods: Pick<
       }
       if (previousError) {
         asNetworkError(previousError);
+      }
+      if (noShowError) {
+        asNetworkError(noShowError);
       }
 
       const text = (value: unknown) =>
@@ -328,6 +311,7 @@ export const appointmentsMethods: Pick<
         previousVisitDates: ((previous ?? []) as { appointment_date: string }[]).map(
           (row) => row.appointment_date,
         ),
+        noShowCount: noShowCount ?? 0,
       };
       if (relationship === "self") {
         summary.health = {
@@ -373,6 +357,8 @@ export const appointmentsMethods: Pick<
         query = query
           .gte("appointment_date", todayYmd)
           .in("status", ["pending", "confirmed"]);
+      } else if (filter === "missed") {
+        query = query.eq("status", "no_show");
       } else if (filter === "cancelled") {
         query = query.eq("status", "cancelled");
       }

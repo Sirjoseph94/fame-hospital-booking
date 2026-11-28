@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
@@ -11,6 +10,7 @@ import { Controller, useForm } from "react-hook-form";
 import { Link, router } from "expo-router";
 import { z } from "zod";
 
+import { PageScrollView } from "@/components/ui/page-scroll-view";
 import { LegalLinks } from "@/components/legal/legal-links";
 import { Card } from "@/components/ui/card";
 import { DatePickerField } from "@/components/ui/date-picker-field";
@@ -79,7 +79,7 @@ export default function SignUpScreen() {
   const dobMaximumDate = new Date();
 
   return (
-    <ScrollView
+    <PageScrollView
       className="flex-1 bg-surface-muted"
       contentContainerClassName="min-h-full items-center justify-center px-4 py-10"
       contentInsetAdjustmentBehavior="automatic"
@@ -201,6 +201,6 @@ export default function SignUpScreen() {
 
         <LegalLinks />
       </View>
-    </ScrollView>
+    </PageScrollView>
   );
 }

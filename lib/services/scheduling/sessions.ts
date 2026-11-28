@@ -14,10 +14,10 @@ import { mapSession, type SessionAvailabilityRow } from "./mappers";
 import type { SchedulingService } from "./types";
 
 const SESSION_COLUMNS =
-  "session_id, doctor_id, session_date, start_time, end_time, capacity, status, cancel_reason, booked_count, places_left, is_bookable, room";
+  "session_id, doctor_id, session_date, start_time, end_time, capacity, status, cancel_reason, booked_count, places_left, is_bookable, room, waitlist_count, in_booking_window";
 
-/** How far ahead patients can see bookable sessions. */
-const BOOKABLE_LIMIT = 60;
+/** Most sessions listed for one doctor when booking (the window caps the dates). */
+const BOOKABLE_LIMIT = 120;
 
 function rethrow(error: unknown): never {
   if (error instanceof SchedulingError) {
@@ -31,6 +31,7 @@ export const sessionsMethods: Pick<
   | "listBookableSessions"
   | "listDoctorSessions"
   | "listSessionsOnDate"
+  | "getSession"
   | "createSessions"
   | "cancelSession"
   | "updateSession"
@@ -44,7 +45,7 @@ export const sessionsMethods: Pick<
         .from("clinic_session_availability")
         .select(SESSION_COLUMNS)
         .eq("doctor_id", doctorId)
-        .eq("is_bookable", true)
+        .eq("in_booking_window", true)
         .order("session_date", { ascending: true })
         .order("start_time", { ascending: true })
         .limit(BOOKABLE_LIMIT);
@@ -94,6 +95,24 @@ export const sessionsMethods: Pick<
         asNetworkError(error);
       }
       return ((data ?? []) as SessionAvailabilityRow[]).map(mapSession);
+    } catch (error) {
+      rethrow(error);
+    }
+  },
+  async getSession(sessionId) {
+    try {
+      const { data, error } = await supabase
+        .from("clinic_session_availability")
+        .select(SESSION_COLUMNS)
+        .eq("session_id", sessionId)
+        .maybeSingle();
+      if (error) {
+        asNetworkError(error);
+      }
+      if (!data) {
+        throw new SchedulingError("INVALID_REQUEST", "That session no longer exists.");
+      }
+      return mapSession(data as SessionAvailabilityRow);
     } catch (error) {
       rethrow(error);
     }

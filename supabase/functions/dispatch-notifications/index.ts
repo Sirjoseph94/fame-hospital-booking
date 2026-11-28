@@ -26,6 +26,7 @@ interface DeliveryRow {
   event_type: string;
   channel: "email" | "sms" | "push";
   status: string;
+  created_at?: string;
   /**
    * Visit details captured when the appointment row is about to be deleted
    * (account deletion, see delete_my_account). Empty object otherwise.
@@ -49,6 +50,16 @@ const STUCK_AFTER_MS = 10 * 60 * 1000;
 const RETRY_AFTER_MS = 60 * 1000;
 /** Max deliveries handled per sweep call. */
 const SWEEP_BATCH = 50;
+/**
+ * Messages that are useless once late (a retried "it's your turn" arriving
+ * after the visit). Older than this, they are skipped instead of sent.
+ */
+const STALE_AFTER_MS: Partial<Record<string, number>> = {
+  queue_called: 10 * 60 * 1000,
+  queue_next: 15 * 60 * 1000,
+  reminder_same_day: 4 * 60 * 60 * 1000,
+  reminder_day_before: 12 * 60 * 60 * 1000,
+};
 
 function timingSafeEqual(a: string, b: string): boolean {
   const enc = new TextEncoder();
@@ -76,7 +87,7 @@ async function loadAppointmentContext(
   const { data: appt, error } = await supabase
     .from("appointments")
     .select(
-      "appointment_date, start_time, appointment_type, room, video_url, address, patient_id, doctor_id, session:clinic_sessions(end_time, room, cancel_reason)",
+      "appointment_date, start_time, appointment_type, room, video_url, address, patient_id, doctor_id, queue_number, beneficiary:beneficiaries(display_name), session:clinic_sessions(end_time, room, cancel_reason)",
     )
     .eq("id", appointmentId)
     .maybeSingle();
@@ -99,6 +110,9 @@ async function loadAppointmentContext(
   );
 
   const session = Array.isArray(appt.session) ? appt.session[0] : appt.session;
+  const beneficiary = Array.isArray(appt.beneficiary)
+    ? appt.beneficiary[0]
+    : appt.beneficiary;
 
   return {
     appointmentDate: appt.appointment_date as string,
@@ -106,12 +120,37 @@ async function loadAppointmentContext(
     sessionEndTime: (session?.end_time as string | undefined) ?? null,
     cancelReason: (session?.cancel_reason as string | undefined) ?? null,
     appointmentType: appt.appointment_type as string,
-    patientName: byId.get(appt.patient_id) ?? "Patient",
+    // The person being seen (a family member's own name when booked for them).
+    patientName:
+      (beneficiary?.display_name as string | undefined)?.trim() ||
+      byId.get(appt.patient_id) ||
+      "Patient",
     doctorName: byId.get(appt.doctor_id) ?? "Doctor",
     room: appt.room ?? session?.room ?? null,
     videoUrl: appt.video_url,
     address: appt.address,
+    queueNumber: (appt.queue_number as number | null) ?? null,
   };
+}
+
+/** hospital_info.name, cached briefly (isolates are reused between calls). */
+const HOSPITAL_NAME_TTL_MS = 5 * 60 * 1000;
+let hospitalNameCache: { value: string | null; at: number } | null = null;
+async function loadHospitalName(supabase: Db): Promise<string | null> {
+  if (hospitalNameCache && Date.now() - hospitalNameCache.at < HOSPITAL_NAME_TTL_MS) {
+    return hospitalNameCache.value;
+  }
+  const { data, error } = await supabase
+    .from("hospital_info")
+    .select("name")
+    .eq("id", 1)
+    .maybeSingle();
+  const value = (data?.name as string | undefined)?.trim() || null;
+  // Don't remember a failed lookup; try again on the next message.
+  if (!error) {
+    hospitalNameCache = { value, at: Date.now() };
+  }
+  return value;
 }
 
 async function sendEmail(
@@ -173,6 +212,7 @@ async function sendExpoPush(
   tokens: string[],
   title: string,
   body: string,
+  data: Record<string, string>,
 ): Promise<string[]> {
   if (tokens.length === 0) {
     return [];
@@ -183,6 +223,10 @@ async function sendExpoPush(
     sound: "default",
     title,
     body,
+    // Lets the app open the related visit when the notification is tapped.
+    data,
+    // Created by the app (lib/hooks/use-push-notifications.ts) on Android.
+    channelId: "default",
   }));
 
   const res = await fetch("https://exp.host/--/api/v2/push/send", {
@@ -280,6 +324,15 @@ async function processDelivery(
     return { id: row.id, status };
   };
 
+  const staleAfter = STALE_AFTER_MS[row.event_type];
+  if (
+    staleAfter !== undefined &&
+    row.created_at &&
+    Date.now() - new Date(row.created_at).getTime() > staleAfter
+  ) {
+    return mark("skipped", "stale");
+  }
+
   const { data: prefs } = await supabase
     .from("notification_preferences")
     .select("email_opt_in, sms_opt_in, push_opt_in")
@@ -319,6 +372,8 @@ async function processDelivery(
     ctx = { ...ctx, ...row.payload } as AppointmentContext;
   }
 
+  ctx = { ...ctx, hospitalName: await loadHospitalName(supabase) };
+
   const eventType = row.event_type as NotificationEventType;
 
   try {
@@ -350,7 +405,11 @@ async function processDelivery(
       if (tokenList.length === 0) return mark("skipped", "no_push_tokens");
 
       const { title, body } = buildPushContent(eventType, ctx);
-      const stale = await sendExpoPush(tokenList, title, body);
+      const data: Record<string, string> = { eventType };
+      if (row.appointment_id) {
+        data.appointmentId = row.appointment_id;
+      }
+      const stale = await sendExpoPush(tokenList, title, body, data);
       if (stale.length > 0) {
         await supabase
           .from("push_device_tokens")

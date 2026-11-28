@@ -1,4 +1,4 @@
-import { format, isSameDay, isValid, parseISO } from "date-fns";
+import { format, isSameDay, parseISO } from "date-fns";
 
 import type {
   Appointment,
@@ -39,15 +39,6 @@ export function filterVisitsForDay(
   day: Date,
 ): DoctorAgendaVisit[] {
   return visits.filter((visit) => isSameDay(parseISO(visit.startsAt), day));
-}
-
-/** A confirmed visit can be marked complete once its start time has passed. */
-export function canDoctorMarkVisitComplete(
-  startsAt: string,
-  now: Date = new Date(),
-): boolean {
-  const start = parseISO(startsAt);
-  return isValid(start) && start.getTime() <= now.getTime();
 }
 
 /**

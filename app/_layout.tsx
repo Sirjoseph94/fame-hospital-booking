@@ -3,12 +3,17 @@ import "../global.css";
 import { Stack, type ErrorBoundaryProps } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Pressable, Text, View } from "react-native";
-import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import {
+  SafeAreaInsetsContext,
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
+import type { PropsWithChildren } from "react";
 
 import { AuthBootstrap } from "@/components/auth-bootstrap";
+import { OfflineBanner } from "@/components/offline-banner";
 import { queryClient } from "@/lib/query/client";
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
@@ -37,14 +42,35 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   );
 }
 
+/**
+ * Keeps every screen clear of the status bar / notch and of the side insets
+ * in landscape, once, here. Descendants see those insets as 0 so nothing
+ * (e.g. a native stack header on Android) adds them again; the bottom inset
+ * is left for the tab bar, sheets and full-page scroll views.
+ */
+function SafeAreaFrame({ children }: PropsWithChildren) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      className="flex-1 bg-surface-muted"
+      style={{ paddingTop: insets.top, paddingLeft: insets.left, paddingRight: insets.right }}
+    >
+      <SafeAreaInsetsContext.Provider value={{ ...insets, top: 0, left: 0, right: 0 }}>
+        {children}
+      </SafeAreaInsetsContext.Provider>
+    </View>
+  );
+}
+
 export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <GestureHandlerRootView className="flex-1">
         <SafeAreaProvider>
-          <BottomSheetModalProvider>
-            <AuthBootstrap>
-              <StatusBar style="dark" />
+          <AuthBootstrap>
+            <StatusBar style="dark" />
+            <SafeAreaFrame>
+              <OfflineBanner />
               <Stack screenOptions={{ headerShown: false }}>
                 <Stack.Screen name="(auth)" />
                 <Stack.Screen name="(patient)" />
@@ -53,10 +79,12 @@ export default function RootLayout() {
                 <Stack.Screen name="privacy" />
                 <Stack.Screen name="terms" />
                 <Stack.Screen name="delete-account" />
+                <Stack.Screen name="about" />
+                <Stack.Screen name="check-in" />
                 <Stack.Screen name="dev" />
               </Stack>
-            </AuthBootstrap>
-          </BottomSheetModalProvider>
+            </SafeAreaFrame>
+          </AuthBootstrap>
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </QueryClientProvider>

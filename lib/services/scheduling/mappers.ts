@@ -3,6 +3,7 @@ import { addMinutes, parseISO } from "date-fns";
 import type {
   Appointment,
   AppointmentDbStatus,
+  AppointmentSource,
   AppointmentStatus,
   AppointmentType,
   Beneficiary,
@@ -55,6 +56,8 @@ export interface SessionAvailabilityRow {
   places_left: number;
   is_bookable: boolean;
   room: string | null;
+  waitlist_count?: number | null;
+  in_booking_window?: boolean | null;
 }
 
 /** A row of the doctor_next_open_session view. */
@@ -92,6 +95,12 @@ export interface AppointmentRow {
   address: string | null;
   reason: string | null;
   notes: string | null;
+  source?: string | null;
+  follow_up_of?: string | null;
+  checked_in_at?: string | null;
+  queue_number?: number | null;
+  called_at?: string | null;
+  finished_at?: string | null;
   session?: SessionTimes | SessionTimes[] | null;
 }
 
@@ -208,12 +217,17 @@ export function mapSession(row: SessionAvailabilityRow): ClinicSession {
     room: row.room ?? undefined,
     cancelReason: row.cancel_reason ?? undefined,
     isBookable: row.is_bookable,
+    inBookingWindow: row.in_booking_window ?? row.is_bookable,
+    waitlistCount: row.waitlist_count ?? 0,
   };
 }
 
 export function mapDbAppointmentStatus(status: string): AppointmentStatus {
   if (status === "completed") {
     return "completed";
+  }
+  if (status === "no_show") {
+    return "missed";
   }
   if (status === "cancelled") {
     return "cancelled";
@@ -226,7 +240,8 @@ function mapDbStatus(status: string): AppointmentDbStatus {
     status === "pending" ||
     status === "confirmed" ||
     status === "cancelled" ||
-    status === "completed"
+    status === "completed" ||
+    status === "no_show"
   ) {
     return status;
   }
@@ -272,15 +287,15 @@ export function mapAppointment(row: AppointmentRow): Appointment {
     address: row.address ?? undefined,
     reason: row.reason ?? undefined,
     notes: row.notes ?? undefined,
+    source: mapSource(row.source),
+    followUpOf: row.follow_up_of ?? undefined,
+    checkedInAt: row.checked_in_at ?? undefined,
+    queueNumber: row.queue_number ?? undefined,
+    calledAt: row.called_at ?? undefined,
+    finishedAt: row.finished_at ?? undefined,
   };
 }
 
-export function toDbAppointmentStatus(status: AppointmentStatus): string {
-  if (status === "completed") {
-    return "completed";
-  }
-  if (status === "cancelled") {
-    return "cancelled";
-  }
-  return "confirmed";
+function mapSource(source: string | null | undefined): AppointmentSource {
+  return source === "waitlist" || source === "follow_up" ? source : "patient";
 }

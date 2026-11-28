@@ -2,8 +2,8 @@ import { useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { format, parseISO } from "date-fns";
-import { ChevronLeft } from "lucide-react-native";
 
+import { BackButton } from "@/components/ui/back-button";
 import { Card } from "@/components/ui/card";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { CardSkeleton, ScreenLoadingSkeleton } from "@/components/ui/skeleton";
@@ -84,14 +84,7 @@ export default function AdminPatientScreen() {
   return (
     <View className="flex-1 bg-surface-muted">
       <View className="flex-row items-center gap-2 px-2 py-3">
-        <Pressable
-          accessibilityLabel="Back to patients"
-          accessibilityRole="button"
-          className="h-12 w-12 items-center justify-center rounded-full web:hover:bg-surface"
-          onPress={goBack}
-        >
-          <ChevronLeft color={colors.ink} size={24} />
-        </Pressable>
+        <BackButton iconOnly label="Back to patients" onPress={goBack} />
         <View className="min-w-0 flex-1">
           <Text className="text-lg font-bold text-ink" numberOfLines={1}>
             {patient?.fullName ?? "Patient"}
@@ -169,6 +162,15 @@ export default function AdminPatientScreen() {
             <Text className="text-base font-semibold text-ink">
               Visits ({patient.appointments.length})
             </Text>
+            {patient.appointments.length > 0 ? (
+              <Text className="text-sm text-ink-muted">
+                {patient.appointments.filter((visit) => visit.status === "completed").length} seen ·{" "}
+                <Text className={patient.appointments.some((visit) => visit.status === "missed") ? "font-semibold text-danger" : ""}>
+                  {patient.appointments.filter((visit) => visit.status === "missed").length} no-shows
+                </Text>{" "}
+                · {patient.appointments.filter((visit) => visit.status === "cancelled").length} cancelled
+              </Text>
+            ) : null}
             {patient.appointments.length === 0 ? (
               <Text className="text-sm text-ink-muted">No visits yet.</Text>
             ) : (
@@ -179,7 +181,7 @@ export default function AdminPatientScreen() {
                       {beneficiaryName(visit.beneficiaryId)} · {doctorName(visit.doctorId)}
                     </Text>
                     <Text className="text-xs font-semibold uppercase text-ink-muted">
-                      {visitStatusLabel(visit.status, visit.dbStatus, "admin", visit.startsAt)}
+                      {visitStatusLabel(visit.status, visit.dbStatus, "admin", visit.startsAt, new Date(), visit)}
                     </Text>
                   </View>
                   {visit.startsAt && visit.endsAt ? (

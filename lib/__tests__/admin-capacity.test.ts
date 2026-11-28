@@ -28,6 +28,8 @@ const session = (
   placesLeft: Math.max(capacity - booked, 0),
   status,
   isBookable: status === "scheduled" && booked < capacity,
+  inBookingWindow: status === "scheduled",
+  waitlistCount: 0,
 });
 
 describe("buildCapacityRows", () => {

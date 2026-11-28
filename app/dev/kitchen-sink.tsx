@@ -37,6 +37,8 @@ function demoSession(id: string, startHour: number, endHour: number, booked: num
     placesLeft: Math.max(capacity - booked, 0),
     status: "scheduled",
     isBookable: booked < capacity,
+    inBookingWindow: true,
+    waitlistCount: 0,
   };
 }
 

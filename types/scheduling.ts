@@ -85,18 +85,26 @@ export interface ClinicSession {
   status: ClinicSessionStatus;
   room?: string;
   cancelReason?: string;
-  /** Scheduled, not yet ended and not full. */
+  /** Scheduled, not yet ended, within the booking window and not full. */
   isBookable: boolean;
+  /** Scheduled, not ended and within the booking window (may be full). */
+  inBookingWindow: boolean;
+  /** People on the waitlist for this session. */
+  waitlistCount: number;
 }
 
 export type AppointmentType = "in-clinic" | "telehealth" | "home-visit";
-export type AppointmentStatus = "upcoming" | "completed" | "cancelled";
+export type AppointmentStatus = "upcoming" | "completed" | "cancelled" | "missed";
 
 export type AppointmentDbStatus =
   | "pending"
   | "confirmed"
   | "cancelled"
-  | "completed";
+  | "completed"
+  | "no_show";
+
+/** How a booking was made. */
+export type AppointmentSource = "patient" | "waitlist" | "follow_up";
 
 export interface Appointment {
   id: string;
@@ -117,6 +125,70 @@ export interface Appointment {
   address?: string;
   reason?: string;
   notes?: string;
+  source: AppointmentSource;
+  /** The visit this follow-up was booked from. */
+  followUpOf?: string;
+  /** Arrived at the clinic (ISO), with their place in the arrival order. */
+  checkedInAt?: string;
+  queueNumber?: number;
+  /** Called in by the doctor (ISO). */
+  calledAt?: string;
+  finishedAt?: string;
+}
+
+/** Where a booked patient is on the day. */
+export type VisitStage =
+  | "booked"
+  | "waiting"
+  | "with-doctor"
+  | "seen"
+  | "no-show"
+  | "cancelled";
+
+/** A patient's live place in the clinic queue (get_queue_status). */
+export interface QueueStatus {
+  dbStatus: AppointmentDbStatus;
+  checkedInAt?: string;
+  queueNumber?: number;
+  calledAt?: string;
+  /** 1 = next in line; absent when not waiting. */
+  position?: number;
+  /** People checked in and not yet called. */
+  waiting: number;
+  /** Highest queue number called so far. */
+  nowServing?: number;
+}
+
+/** Staff counts for one session (clinic_session_progress). */
+export interface SessionProgress {
+  sessionId: string;
+  doctorId: string;
+  dateYmd: string;
+  startsAt: string;
+  endsAt: string;
+  capacity: number;
+  room?: string;
+  status: ClinicSessionStatus;
+  booked: number;
+  notArrived: number;
+  waiting: number;
+  withDoctor: number;
+  seen: number;
+  noShow: number;
+  cancelled: number;
+}
+
+/** One of the signed-in patient's waitlist entries. */
+export interface WaitlistEntry {
+  id: string;
+  sessionId: string;
+  beneficiaryId: string;
+  doctorId: string;
+  startsAt: string;
+  endsAt: string;
+  room?: string;
+  /** 1 = first to get a place that frees up. */
+  position: number;
 }
 
 /** What a doctor sees about a booked patient (agenda "Patient details"). */
@@ -146,4 +218,6 @@ export interface PatientSummary {
   };
   /** Completed visits with this doctor, newest first (ISO dates). */
   previousVisitDates: string[];
+  /** Visits with this doctor the patient didn't attend. */
+  noShowCount: number;
 }

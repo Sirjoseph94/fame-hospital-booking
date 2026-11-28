@@ -6,4 +6,5 @@ export declare const colors: {
   readonly primary: string;
   readonly available: string;
   readonly warning: string;
+  readonly danger: string;
 };

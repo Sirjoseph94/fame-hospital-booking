@@ -10,8 +10,9 @@ import { router } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { AddBeneficiarySheet } from "@/components/patient/add-beneficiary-sheet";
+import { CheckInSheet } from "@/components/patient/check-in-sheet";
+import { QueueStatusCard } from "@/components/patient/queue-status-card";
 import { SetupSelfBeneficiarySheet } from "@/components/patient/setup-self-beneficiary-sheet";
-import { HospitalFooter } from "@/components/patient/hospital-footer";
 import { RecentUpdatesCard } from "@/components/patient/recent-updates-card";
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
 import { BeneficiaryPill } from "@/components/ui/beneficiary-pill";
@@ -22,7 +23,7 @@ import {
   HomeScreenSkeleton,
   ScreenLoadingSkeleton,
 } from "@/components/ui/skeleton";
-import { Sheet } from "@/components/ui/sheet";
+import { afterSheetCloses, Sheet } from "@/components/ui/sheet";
 import { VisitCard } from "@/components/ui/visit-card";
 import { ShellHeader } from "@/components/shell-header";
 import { confirmAsync } from "@/lib/confirm";
@@ -45,6 +46,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { useBookingStore } from "@/lib/stores/booking";
 import { usePatientBookingPrefs } from "@/lib/stores/patient-booking-prefs";
+import { usePendingCheckIn } from "@/lib/stores/pending-check-in";
 import { useSessionStore } from "@/lib/stores/session";
 import { SchedulingError } from "@/lib/services/scheduling";
 import type { AddBeneficiaryFields } from "@/components/patient/add-beneficiary-sheet";
@@ -104,7 +106,19 @@ export default function PatientHomeScreen() {
   const resetBookingToSelf = usePatientBookingPrefs((state) => state.resetToSelf);
 
   const [startingBooking, setStartingBooking] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
+  const [homeMessage, setHomeMessage] = useState<string | null>(null);
   const startingBookingRef = useRef(false);
+
+  // Signed in after scanning the reception poster: continue to check-in.
+  const pendingCheckInCode = usePendingCheckIn((state) => state.code);
+  const clearPendingCheckIn = usePendingCheckIn((state) => state.setCode);
+  useEffect(() => {
+    if (pendingCheckInCode) {
+      clearPendingCheckIn(null);
+      router.push({ pathname: "/check-in", params: { code: pendingCheckInCode } });
+    }
+  }, [clearPendingCheckIn, pendingCheckInCode]);
 
   // Re-render every minute so the next-visit card drops visits whose session ended.
   useNow(60_000);
@@ -165,6 +179,7 @@ export default function PatientHomeScreen() {
       beneficiaries.find((row) => row.id === next.beneficiaryId) ??
       pickSelfBeneficiary(beneficiaries);
     return {
+      visit: { ...next, startsAt: next.startsAt, endsAt: next.endsAt },
       beneficiaryName: beneficiary?.displayName ?? "Patient",
       doctorName: doctorNameById(doctors, next.doctorId) ?? "Doctor",
       startsAt: next.startsAt,
@@ -325,7 +340,7 @@ export default function PatientHomeScreen() {
       });
       cacheCreatedBeneficiary(session.userId, created);
       setAddPatientOpen(false);
-      void confirmAsync({
+      afterSheetCloses(() => void confirmAsync({
         title: `Added ${created.displayName}`,
         message:
           "Book an appointment for them now, or add them to your list only?",
@@ -342,7 +357,7 @@ export default function PatientHomeScreen() {
           `Ready to book for ${created.displayName}.`,
         );
         router.push("/book/doctor");
-      });
+      }));
       return true;
     } catch (cause) {
       setAddPatientError(
@@ -430,15 +445,33 @@ export default function PatientHomeScreen() {
               </Card>
 
               {upcomingVisit ? (
-                <VisitCard
-                  beneficiaryName={upcomingVisit.beneficiaryName}
-                  dbStatus={upcomingVisit.dbStatus}
-                  doctorName={upcomingVisit.doctorName}
-                  endsAt={upcomingVisit.endsAt}
-                  room={upcomingVisit.room}
-                  startsAt={upcomingVisit.startsAt}
-                  status="upcoming"
-                />
+                <View className="gap-3">
+                  <VisitCard
+                    beneficiaryName={upcomingVisit.beneficiaryName}
+                    dbStatus={upcomingVisit.dbStatus}
+                    doctorName={upcomingVisit.doctorName}
+                    endsAt={upcomingVisit.endsAt}
+                    progress={upcomingVisit.visit}
+                    room={upcomingVisit.room}
+                    sessionCancelled={upcomingVisit.visit.sessionCancelled}
+                    startsAt={upcomingVisit.startsAt}
+                    status="upcoming"
+                    onPress={() =>
+                      router.push({ pathname: "/visit/[id]", params: { id: upcomingVisit.visit.id } })
+                    }
+                  />
+                  <QueueStatusCard
+                    compact
+                    room={upcomingVisit.room}
+                    visit={upcomingVisit.visit}
+                    onCheckIn={() => setCheckInOpen(true)}
+                  />
+                  {homeMessage ? (
+                    <Text accessibilityLiveRegion="polite" className="px-1 text-sm text-primary">
+                      {homeMessage}
+                    </Text>
+                  ) : null}
+                </View>
               ) : (
                 <EmptyState message="No upcoming visits yet." title="Upcoming" />
               )}
@@ -485,8 +518,6 @@ export default function PatientHomeScreen() {
           </View>
 
           {userId ? <RecentUpdatesCard userId={userId} /> : null}
-
-          <HospitalFooter />
         </ScrollView>
       )}
 
@@ -513,7 +544,7 @@ export default function PatientHomeScreen() {
               className="min-h-12 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
               onPress={() => {
                 setBeneficiarySheetOpen(false);
-                setSetupSelfOpen(true);
+                afterSheetCloses(() => setSetupSelfOpen(true));
               }}
             >
               <Text className="font-semibold text-primary">Book for myself</Text>
@@ -539,13 +570,24 @@ export default function PatientHomeScreen() {
             className="min-h-12 items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
             onPress={() => {
               setBeneficiarySheetOpen(false);
-              setAddPatientOpen(true);
+              afterSheetCloses(() => setAddPatientOpen(true));
             }}
           >
             <Text className="font-semibold text-primary">Add new patient</Text>
           </Pressable>
         </View>
       </Sheet>
+
+      {checkInOpen && upcomingVisit ? (
+        <CheckInSheet
+          key={upcomingVisit.visit.id}
+          appointmentId={upcomingVisit.visit.id}
+          doctorName={upcomingVisit.doctorName}
+          patientName={upcomingVisit.beneficiaryName}
+          onCheckedIn={({ queueNumber }) => setHomeMessage(`Checked in. Your number is ${queueNumber}.`)}
+          onOpenChange={setCheckInOpen}
+        />
+      ) : null}
 
       <AddBeneficiarySheet
         errorMessage={addPatientError}

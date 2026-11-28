@@ -8,9 +8,13 @@ import {
   View,
 } from "react-native";
 import { isPast, parseISO } from "date-fns";
+import { router } from "expo-router";
 
 import { RefreshErrorNotice } from "@/components/ui/refresh-error-notice";
+import { CheckInSheet } from "@/components/patient/check-in-sheet";
 import { MoveSessionSheet } from "@/components/patient/move-session-sheet";
+import { QueueStatusCard } from "@/components/patient/queue-status-card";
+import { WaitlistCard } from "@/components/patient/waitlist-card";
 import { VisitCard } from "@/components/ui/visit-card";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -39,7 +43,7 @@ type VisitsTab = "upcoming" | "past" | "proxy";
 const tabs: { id: VisitsTab; label: string }[] = [
   { id: "upcoming", label: "Upcoming" },
   { id: "past", label: "Past" },
-  { id: "proxy", label: "Proxy Managed" },
+  { id: "proxy", label: "Family" },
 ];
 
 interface EnrichedVisit extends Appointment {
@@ -67,6 +71,7 @@ export default function PatientVisitsScreen() {
     null,
   );
   const [cancelBanner, setCancelBanner] = useState<string | null>(null);
+  const [checkInTarget, setCheckInTarget] = useState<EnrichedVisit | null>(null);
   // Re-render every minute so visits move to Past when their session ends.
   useNow(60_000);
 
@@ -145,6 +150,7 @@ export default function PatientVisitsScreen() {
         (visit) =>
           visit.status === "completed" ||
           visit.status === "cancelled" ||
+          visit.status === "missed" ||
           (visit.status === "upcoming" && isPast(parseISO(visit.endsAt!))),
       );
     }
@@ -166,7 +172,7 @@ export default function PatientVisitsScreen() {
     }
     try {
       await cancelAppointment.mutateAsync(visit.id);
-      setCancelBanner("Appointment cancelled.");
+      setCancelBanner("Appointment cancelled. Your place has been released for other patients.");
       AccessibilityInfo.announceForAccessibility("Appointment cancelled.");
     } catch (cause) {
       const message =
@@ -245,10 +251,17 @@ export default function PatientVisitsScreen() {
               <Text accessibilityLiveRegion="polite" className="text-base text-ink">
                 {cancelBanner}
               </Text>
-              <Text className="text-sm text-ink-muted">
-                Your place has been released for other patients.
-              </Text>
             </Card>
+          ) : null}
+
+          {activeTab === "upcoming" && userId ? (
+            <WaitlistCard
+              doctorName={(doctorId) => doctorRows?.find((row) => row.id === doctorId)?.name ?? "Doctor"}
+              patientName={(beneficiaryId) =>
+                beneficiaryRows?.find((row) => row.id === beneficiaryId)?.displayName ?? "Patient"
+              }
+              userId={userId}
+            />
           ) : null}
 
           {filtered.length === 0 ? (
@@ -258,7 +271,7 @@ export default function PatientVisitsScreen() {
                   ? "No upcoming visits."
                   : activeTab === "past"
                     ? "No past visits yet."
-                    : "No proxy-managed visits."
+                    : "No visits for family members."
               }
             />
           ) : (
@@ -270,13 +283,23 @@ export default function PatientVisitsScreen() {
                     dbStatus={visit.dbStatus}
                     doctorName={visit.doctorName}
                     endsAt={visit.endsAt!}
+                    progress={visit}
                     proxyTag={visit.proxyTag}
                     room={visit.room}
                     sessionCancelled={visit.sessionCancelled}
                     startsAt={visit.startsAt!}
                     status={visit.status}
+                    onPress={() => router.push({ pathname: "/visit/[id]", params: { id: visit.id } })}
                   />
-                  {visit.status === "upcoming" && activeTab === "upcoming" ? (
+                  {visit.status === "upcoming" && activeTab !== "past" ? (
+                    <QueueStatusCard
+                      compact
+                      room={visit.room}
+                      visit={{ ...visit, startsAt: visit.startsAt!, endsAt: visit.endsAt! }}
+                      onCheckIn={() => setCheckInTarget(visit)}
+                    />
+                  ) : null}
+                  {visit.status === "upcoming" && activeTab === "upcoming" && !visit.checkedInAt ? (
                     <View className="flex-row gap-2">
                       {visit.sessionId ? (
                         <Pressable
@@ -307,6 +330,19 @@ export default function PatientVisitsScreen() {
           )}
         </ScrollView>
       )}
+
+      {checkInTarget ? (
+        <CheckInSheet
+          key={checkInTarget.id}
+          appointmentId={checkInTarget.id}
+          doctorName={checkInTarget.doctorName}
+          patientName={checkInTarget.beneficiaryName}
+          onCheckedIn={({ queueNumber }) => setCancelBanner(`Checked in. Your number is ${queueNumber}.`)}
+          onOpenChange={(open) => {
+            if (!open) setCheckInTarget(null);
+          }}
+        />
+      ) : null}
 
       {rescheduleTarget ? (
         <MoveSessionSheet

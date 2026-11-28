@@ -19,4 +19,10 @@ export const schedulingService: SchedulingService = {
 
 export { SchedulingError, type SchedulingErrorCode } from "./errors";
 export type * from "./types";
-export { toDbAppointmentStatus } from "./mappers";
+export {
+  visitFlowService,
+  checkInCodeFromScan,
+  normalizeCheckInCode,
+  type CheckInResult,
+  type VisitAction,
+} from "./visit-flow";

@@ -10,6 +10,7 @@ import {
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
+import { AboutLinksCard } from "@/components/hospital/about-links-card";
 import { NotificationPreferencesCard } from "@/components/notifications/notification-preferences-card";
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
@@ -255,6 +256,7 @@ export default function DoctorProfileScreen() {
               <Text className="font-semibold text-surface">Save profile</Text>
             )}
           </Pressable>
+          <AboutLinksCard />
         </ScrollView>
       )}
     </View>

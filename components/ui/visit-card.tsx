@@ -3,7 +3,7 @@ import { CalendarClock, MapPin } from "lucide-react-native";
 
 import { Card } from "@/components/ui/card";
 import { formatSessionWhen } from "@/lib/session-groups";
-import { visitStatusLabel } from "@/lib/visit-status-label";
+import { visitStatusLabel, type VisitProgress } from "@/lib/visit-status-label";
 import { colors } from "@/lib/theme-colors";
 import type {
   AppointmentDbStatus,
@@ -22,6 +22,8 @@ interface VisitCardProps {
   proxyTag?: string;
   /** The whole clinic session was cancelled (with an optional reason). */
   sessionCancelled?: { reason?: string };
+  /** Check-in / queue state on the day. */
+  progress?: VisitProgress;
   onPress?: () => void;
 }
 
@@ -35,10 +37,11 @@ export function VisitCard({
   room,
   proxyTag,
   sessionCancelled,
+  progress,
   onPress,
 }: VisitCardProps) {
   const when = formatSessionWhen({ startsAt, endsAt });
-  const badge = visitStatusLabel(status, dbStatus, "patient", startsAt);
+  const badge = visitStatusLabel(status, dbStatus, "patient", startsAt, new Date(), progress);
   const summary = `${badge} visit for ${beneficiaryName} with ${doctorName}, ${when}`;
 
   const body = (
@@ -52,8 +55,18 @@ export function VisitCard({
             {doctorName}
           </Text>
         </View>
-        <View className="rounded-full bg-surface-muted px-3 py-1">
-          <Text className="text-xs font-semibold uppercase text-ink-muted">
+        <View
+          className={[
+            "rounded-full px-3 py-1",
+            status === "missed" ? "bg-danger/10" : progress?.calledAt ? "bg-available/15" : "bg-surface-muted",
+          ].join(" ")}
+        >
+          <Text
+            className={[
+              "text-xs font-semibold uppercase",
+              status === "missed" ? "text-danger" : "text-ink-muted",
+            ].join(" ")}
+          >
             {badge}
           </Text>
         </View>
@@ -66,9 +79,9 @@ export function VisitCard({
         </Text>
       </View>
 
-      {status === "upcoming" ? (
+      {status === "upcoming" && !progress?.checkedInAt ? (
         <Text className="text-sm text-ink-muted">
-          Seen in order of arrival. Come early and check in at reception.
+          Seen in order of arrival. Check in with the app when you reach reception.
         </Text>
       ) : null}
 
@@ -103,9 +116,10 @@ export function VisitCard({
 
   return (
     <Pressable
+      accessibilityHint="Opens the visit"
       accessibilityLabel={summary}
       accessibilityRole="button"
-      className="web:hover:opacity-95"
+      className="web:hover:opacity-95 active:opacity-90"
       onPress={onPress}
     >
       {body}

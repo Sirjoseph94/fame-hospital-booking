@@ -62,7 +62,7 @@ export interface DoctorAgendaVisitContext {
   proxyTag?: string;
 }
 
-export type AppointmentListFilter = "all" | "today" | "upcoming" | "cancelled";
+export type AppointmentListFilter = "all" | "today" | "upcoming" | "missed" | "cancelled";
 
 export interface AppointmentPageQuery {
   filter: AppointmentListFilter;
@@ -104,7 +104,10 @@ export interface SchedulingService {
     details: { specialty: string; department: string },
   ): Promise<DoctorDetail>;
 
-  /** Upcoming sessions a patient can book (scheduled, not ended, not full). */
+  /**
+   * Upcoming sessions inside the booking window, including full ones (they
+   * offer the waitlist). Check `isBookable` before booking.
+   */
   listBookableSessions(doctorId: string): Promise<ClinicSession[]>;
   /** Every session (any status) for one doctor in an inclusive date range. */
   listDoctorSessions(
@@ -113,6 +116,8 @@ export interface SchedulingService {
   ): Promise<ClinicSession[]>;
   /** Every doctor's sessions on one day (admin capacity). */
   listSessionsOnDate(dateYmd: string): Promise<ClinicSession[]>;
+  /** One session with its booked count (any status). */
+  getSession(sessionId: string): Promise<ClinicSession>;
   createSessions(input: CreateSessionsInput): Promise<CreateSessionsResult>;
   cancelSession(sessionId: string, reason?: string): Promise<CancelSessionResult>;
   /** Change an upcoming session's room and patient limit. */
@@ -126,6 +131,8 @@ export interface SchedulingService {
   /** Moves a booking to another session with the same doctor. */
   moveBooking(appointmentId: string, newSessionId: string): Promise<Appointment>;
   listAppointments(accountHolderId: string): Promise<Appointment[]>;
+  /** Staff: every booking in one session, in booking order. */
+  listSessionAppointments(sessionId: string): Promise<Appointment[]>;
   /** A doctor's appointments, optionally limited to an inclusive date range. */
   listDoctorAppointments(
     doctorId: string,
@@ -134,7 +141,6 @@ export interface SchedulingService {
   enrichDoctorAgendaVisits(
     appointments: Appointment[],
   ): Promise<Map<string, DoctorAgendaVisitContext>>;
-  completeDoctorAppointment(appointmentId: string): Promise<Appointment>;
   /** Doctor: the booked patient's details and previous visits with this doctor. */
   getPatientSummary(appointment: Appointment): Promise<PatientSummary>;
   cancelAppointment(appointmentId: string): Promise<Appointment>;

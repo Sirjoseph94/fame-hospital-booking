@@ -6,7 +6,14 @@ export type NotificationEventType =
   | "visit_rescheduled"
   | "visit_rescheduled_doctor"
   | "visit_completed"
-  | "visit_booked";
+  | "visit_booked"
+  | "visit_missed"
+  | "queue_called"
+  | "queue_next"
+  | "reminder_day_before"
+  | "reminder_same_day"
+  | "follow_up_booked"
+  | "waitlist_booked";
 
 export interface AppointmentContext {
   appointmentDate: string;
@@ -21,6 +28,25 @@ export interface AppointmentContext {
   room?: string | null;
   videoUrl?: string | null;
   address?: string | null;
+  /** Arrival number in the session queue, once checked in. */
+  queueNumber?: number | null;
+  /** From hospital_info.name (falls back to "FAME Hospital"). */
+  hospitalName?: string | null;
+}
+
+function hospitalNameOf(ctx: AppointmentContext): string {
+  return ctx.hospitalName?.trim() || "FAME Hospital";
+}
+
+/** "Dr. Ada Obi", without doubling a title the name already has. */
+function drName(ctx: AppointmentContext): string {
+  const name = ctx.doctorName.trim();
+  return /^dr\.?\s/i.test(name) ? name : `Dr. ${name}`;
+}
+
+function roomSuffix(ctx: AppointmentContext): string {
+  if (!ctx.room) return "";
+  return /^\d/.test(ctx.room) ? `, Room ${ctx.room}` : `, ${ctx.room}`;
 }
 
 function formatWhen(ctx: AppointmentContext): string {
@@ -50,7 +76,7 @@ export function buildPushContent(
     case "booking_pending_patient":
       return {
         title: "Booking received",
-        body: `Your visit with Dr. ${ctx.doctorName} on ${when} is awaiting confirmation.`,
+        body: `Your visit with ${drName(ctx)} on ${when} is awaiting confirmation.`,
       };
     case "visit_confirmed": {
       let extra = "";
@@ -63,20 +89,20 @@ export function buildPushContent(
       }
       return {
         title: "Visit confirmed",
-        body: `Dr. ${ctx.doctorName} confirmed your ${typeLabel(ctx.appointmentType).toLowerCase()} visit on ${when}.${extra}`,
+        body: `${drName(ctx)} confirmed your ${typeLabel(ctx.appointmentType).toLowerCase()} visit on ${when}.${extra}`,
       };
     }
     case "visit_cancelled":
       return {
         title: "Visit cancelled",
         body: ctx.cancelReason
-          ? `Dr. ${ctx.doctorName}'s clinic on ${when} was cancelled: ${ctx.cancelReason}. Please book another session.`
-          : `The visit on ${when} with Dr. ${ctx.doctorName} was cancelled.`,
+          ? `${drName(ctx)}'s clinic on ${when} was cancelled: ${ctx.cancelReason}. Please book another session.`
+          : `The visit on ${when} with ${drName(ctx)} was cancelled.`,
       };
     case "visit_rescheduled":
       return {
         title: "Visit rescheduled",
-        body: `Your visit with Dr. ${ctx.doctorName} is now on ${when}.`,
+        body: `Your visit with ${drName(ctx)} is now on ${when}.`,
       };
     case "visit_rescheduled_doctor":
       return {
@@ -86,15 +112,50 @@ export function buildPushContent(
     case "visit_completed":
       return {
         title: "Visit complete",
-        body: `Your visit with Dr. ${ctx.doctorName} on ${when} is marked complete.`,
+        body: `Your visit with ${drName(ctx)} on ${when} is marked complete.`,
       };
     case "visit_booked":
       return {
         title: "Visit booked",
-        body: `You're booked with Dr. ${ctx.doctorName}: ${when}${ctx.room ? `, ${ctx.room}` : ""}. Patients are seen in order of arrival, so come early.`,
+        body: `You're booked with ${drName(ctx)}: ${when}${roomSuffix(ctx)}. Patients are seen in order of arrival, so come early.`,
+      };
+    case "visit_missed":
+      return {
+        title: "Visit missed",
+        body: `${ctx.patientName}'s visit to ${drName(ctx)}'s clinic on ${when} was recorded as missed. Book another session in the app when you're ready.`,
+      };
+    case "queue_called":
+      return {
+        title: ctx.queueNumber ? `It's your turn (#${ctx.queueNumber})` : "It's your turn",
+        body: `${drName(ctx)} is ready to see ${ctx.patientName} now${roomSuffix(ctx)}.`,
+      };
+    case "queue_next":
+      return {
+        title: "You're next",
+        body: `${ctx.patientName} is next in line for ${drName(ctx)}. Please stay close to the clinic.`,
+      };
+    case "reminder_day_before":
+      return {
+        title: "Visit tomorrow",
+        body: `Reminder: ${ctx.patientName} is booked with ${drName(ctx)} tomorrow, ${when}${roomSuffix(ctx)}. Patients are seen in order of arrival. Check in at reception with the app.`,
+      };
+    case "reminder_same_day":
+      return {
+        title: "Visit today",
+        body: `Today: ${ctx.patientName} with ${drName(ctx)}, ${when}${roomSuffix(ctx)}. Scan the check-in code at reception when you arrive.`,
+      };
+    case "follow_up_booked":
+      return {
+        title: "Follow-up booked",
+        body: `${drName(ctx)} booked a follow-up for ${ctx.patientName}: ${when}${roomSuffix(ctx)}. You can change or cancel it in the app.`,
+      };
+    case "waitlist_booked":
+      return {
+        title: "You got a place",
+        body: `A place opened up: ${ctx.patientName} is now booked with ${drName(ctx)}, ${when}${roomSuffix(ctx)}. Can't make it? Cancel in the app so someone else can come.`,
       };
     default:
-      return { title: "FAME Hospital", body: "You have a scheduling update." };
+      return { title: hospitalNameOf(ctx), body: "You have a scheduling update." };
   }
 }
 
@@ -131,7 +192,8 @@ export function buildEmailContent(
   ctx: AppointmentContext,
 ): { subject: string; text: string; html: string } {
   const push = buildPushContent(eventType, ctx);
-  const subject = `FAME Hospital — ${push.title}`;
+  const hospital = hospitalNameOf(ctx);
+  const subject = `${hospital} — ${push.title}`;
   const text = `${push.body}\n\nVisit type: ${typeLabel(ctx.appointmentType)}\nWhen: ${formatWhen(ctx)}\nDoctor: ${ctx.doctorName}\nPatient: ${ctx.patientName}`;
 
   let details = "";
@@ -139,14 +201,14 @@ export function buildEmailContent(
     const href = safeHttpsUrl(ctx.videoUrl);
     details = href
       ? `<p>Video link: <a href="${escapeHtml(href)}">${escapeHtml(href)}</a></p>`
-      : `<p>Video link: open the FAME Hospital app.</p>`;
+      : `<p>Video link: open the ${escapeHtml(hospital)} app.</p>`;
   } else if (ctx.appointmentType === "in-clinic" && ctx.room) {
     details = `<p>Room: ${escapeHtml(ctx.room)}</p>`;
   } else if (ctx.appointmentType === "home-visit" && ctx.address) {
     details = `<p>Address: ${escapeHtml(ctx.address)}</p>`;
   }
 
-  const html = `<p>${escapeHtml(push.body)}</p><p><strong>When:</strong> ${escapeHtml(formatWhen(ctx))}</p><p><strong>Type:</strong> ${escapeHtml(typeLabel(ctx.appointmentType))}</p>${details}<p>Open the FAME Hospital app for details.</p>`;
+  const html = `<p>${escapeHtml(push.body)}</p><p><strong>When:</strong> ${escapeHtml(formatWhen(ctx))}</p><p><strong>Type:</strong> ${escapeHtml(typeLabel(ctx.appointmentType))}</p>${details}<p>Open the ${escapeHtml(hospital)} app for details.</p>`;
 
   return { subject, text, html };
 }

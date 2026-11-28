@@ -9,7 +9,6 @@ import {
 } from "react-native";
 import { addDays, format, parseISO } from "date-fns";
 import { router } from "expo-router";
-import { TimeZoneCard } from "@/components/admin/time-zone-card";
 import { ShellHeader } from "@/components/shell-header";
 import { Card } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
@@ -267,8 +266,6 @@ export default function AdminRosterScreen() {
           <RefreshErrorNotice
             message={refreshError ? loadErrorMessage(refreshError) : null}
           />
-
-          <TimeZoneCard />
 
           <Card style={{ gap: 12 }}>
             <Text className="text-base font-semibold text-ink">Invite doctor</Text>

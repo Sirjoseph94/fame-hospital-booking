@@ -46,6 +46,15 @@ export const queryKeys = {
     detail: (patientId: string) => ["patients", "detail", patientId] as const,
   },
   hospitalSettings: ["hospital-settings"] as const,
+  hospitalInfo: ["hospital-info"] as const,
+  checkInCode: ["check-in-code"] as const,
+  queueStatus: (appointmentId: string) => ["appointments", "queue", appointmentId] as const,
+  sessionProgress: (dateYmd: string) => ["sessions", "progress", dateYmd] as const,
+  waitlist: {
+    all: ["waitlist"] as const,
+    mine: (userId: string) => ["waitlist", "mine", userId] as const,
+  },
+  reports: (fromYmd: string, toYmd: string) => ["reports", fromYmd, toYmd] as const,
   updatesAll: ["updates"] as const,
   updates: (userId: string) => ["updates", userId] as const,
 };
@@ -61,5 +70,7 @@ export function invalidateScheduling(queryClient: QueryClient): Promise<void> {
     queryClient.invalidateQueries({ queryKey: queryKeys.doctors.all }),
     // Booking changes send messages, which show up as updates.
     queryClient.invalidateQueries({ queryKey: queryKeys.updatesAll }),
+    // A freed place can book someone off a waitlist.
+    queryClient.invalidateQueries({ queryKey: queryKeys.waitlist.all }),
   ]).then(() => undefined);
 }

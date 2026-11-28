@@ -64,6 +64,8 @@ describe("session mappers", () => {
         places_left: 2,
         is_bookable: true,
         room: "Room 4",
+        waitlist_count: 3,
+        in_booking_window: true,
       }),
     ).toEqual({
       id: "s1",
@@ -78,6 +80,8 @@ describe("session mappers", () => {
       room: "Room 4",
       cancelReason: undefined,
       isBookable: true,
+      inBookingWindow: true,
+      waitlistCount: 3,
     });
   });
 
@@ -119,6 +123,30 @@ describe("mapAppointment", () => {
       dbStatus: "confirmed",
       reason: "Cough",
     });
+  });
+
+  it("maps no-shows, how it was booked and the day's queue fields", () => {
+    expect(
+      mapAppointment(
+        appointmentRow({
+          status: "no_show",
+          source: "follow_up",
+          follow_up_of: "a0",
+          checked_in_at: "2026-12-01T08:40:00Z",
+          queue_number: 4,
+          called_at: null,
+        }),
+      ),
+    ).toMatchObject({
+      status: "missed",
+      dbStatus: "no_show",
+      source: "follow_up",
+      followUpOf: "a0",
+      checkedInAt: "2026-12-01T08:40:00Z",
+      queueNumber: 4,
+      calledAt: undefined,
+    });
+    expect(mapAppointment(appointmentRow({ source: "something-else" })).source).toBe("patient");
   });
 
   it("accepts the session join as a one-element array", () => {

@@ -91,6 +91,12 @@ function SummaryBody({ summary }: { summary: PatientSummary }) {
             : "None"
         }
       />
+      {summary.noShowCount > 0 ? (
+        <Row
+          label="Missed visits with you"
+          value={`${summary.noShowCount} ${summary.noShowCount === 1 ? "no-show" : "no-shows"}`}
+        />
+      ) : null}
     </View>
   );
 }

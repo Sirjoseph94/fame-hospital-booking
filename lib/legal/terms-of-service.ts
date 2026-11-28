@@ -1,9 +1,11 @@
-import { hospitalInfo } from "@/lib/hospital-info";
+import { contactSentence, type HospitalInfo } from "@/lib/hospital-info";
 import type { LegalDocument } from "@/lib/legal/types";
 
-export const termsOfService: LegalDocument = {
+/** Built from the admin-managed hospital details (hospital_info). */
+export function buildTermsOfService(hospitalInfo: HospitalInfo): LegalDocument {
+  return {
   title: "Terms of Service",
-  lastUpdated: "November 27, 2026",
+  lastUpdated: "November 28, 2026",
   intro: `These terms cover your use of the FAME Hospital Booking app, run by ${hospitalInfo.name}. By creating an account or using the app, you agree to them. Please also read our Privacy Policy, which explains how we handle your information.`,
   sections: [
     {
@@ -35,7 +37,10 @@ export const termsOfService: LegalDocument = {
             "Your place is confirmed as soon as you book; the app shows each booking's status.",
             "The hospital may need to reschedule or cancel an appointment, for example if a doctor becomes unavailable. We will tell you as soon as we can and help you rebook.",
             "If you can't attend, please cancel or change session in the app as early as possible so someone else can have your place.",
-            "Arrive during the session and check in at reception. Waiting times depend on how many patients arrive before you.",
+            "Arrive during the session and check in, by scanning the code at reception in the app or at the desk. Your place in the queue is set when you check in, and waiting times depend on how many patients arrive before you.",
+            "If you don't check in before the session ends, the visit may be recorded as missed.",
+            "When a session is full you can join its waitlist. If a place frees up, you are booked automatically and told straight away; cancel in the app if you can no longer come.",
+            "Your doctor may book a follow-up visit for you. You can change or cancel it like any other booking.",
           ],
         },
       ],
@@ -64,7 +69,7 @@ export const termsOfService: LegalDocument = {
     {
       heading: "Suspension and closing your account",
       blocks: [
-        `We may suspend or deactivate an account that breaks these terms or puts patients, staff or the service at risk. You can stop using the app at any time and delete your account from the Profile tab (Delete account). Doctor and administrator accounts are closed by the hospital; email ${hospitalInfo.email}.`,
+        `We may suspend or deactivate an account that breaks these terms or puts patients, staff or the service at risk. You can stop using the app at any time and delete your account from the Profile tab (Delete account). Doctor and administrator accounts are closed by the hospital; ${contactSentence(hospitalInfo)}.`,
       ],
     },
     {
@@ -94,8 +99,9 @@ export const termsOfService: LegalDocument = {
     {
       heading: "Contact us",
       blocks: [
-        `Questions about these terms: email ${hospitalInfo.email} or call ${hospitalInfo.phone} (${hospitalInfo.hours}).`,
+        `Questions about these terms: ${contactSentence(hospitalInfo)}.`,
       ],
     },
   ],
 };
+}

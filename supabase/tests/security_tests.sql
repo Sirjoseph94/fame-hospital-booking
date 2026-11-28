@@ -27,6 +27,9 @@ update public.profiles set role = 'admin' where id = '00000000-0000-0000-0000-00
 select t.ok((select role from public.profiles where id = '00000000-0000-0000-0000-0000000000ad') = 'admin',
   'owner (SQL editor) can promote the first admin');
 
+-- Older sections book up to 91 days ahead; the booking window is tested on its own below.
+update public.hospital_settings set booking_window_days = 365 where id = 1;
+
 -- ---------------------------------------------------------------- patient P
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a1","email":"p@x.test","role":"authenticated"}', false);
 set role authenticated;
@@ -699,6 +702,337 @@ select t.ok(not exists (select 1 from public.notification_deliveries where recip
   'patients still only see their own deliveries');
 select t.ok(public.retry_notification_delivery(gen_random_uuid())->>'code' = 'FORBIDDEN',
   'patients cannot retry deliveries');
+reset role;
+
+-- =================================================================== hospital info + settings
+reset role;
+select set_config('request.jwt.claims', '', false);
+set role anon;
+select t.ok((select name from public.hospital_info where id = 1) = 'FAME Hospital',
+  'signed-out visitors can read hospital info');
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000a2","email":"q@x.test","role":"authenticated"}', false);
+set role authenticated;
+do $$ declare n int; begin
+  update public.hospital_info set phone = '+234 1 000 0000' where id = 1;
+  get diagnostics n = row_count;
+  if n <> 0 then raise exception 'FAIL: patient updated hospital info'; end if;
+  raise notice 'PASS: patients cannot change hospital info';
+end $$;
+select t.ok(not exists (select 1 from public.check_in_secret), 'patients cannot read the check-in code');
+select t.ok(public.rotate_check_in_code()->>'code' = 'FORBIDDEN', 'patients cannot rotate the check-in code');
+do $$ declare n int; begin
+  update public.hospital_settings set booking_window_days = 5 where id = 1;
+  get diagnostics n = row_count;
+  if n <> 0 then raise exception 'FAIL: patient changed settings'; end if;
+  raise notice 'PASS: patients cannot change platform settings';
+end $$;
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+update public.hospital_info
+set phone = ' +234 (1) 555-0100 ', email = ' Desk@FAME.example ', address = '1 Hospital Road'
+where id = 1;
+select t.ok((select phone = '+234 (1) 555-0100' and email = 'desk@fame.example' from public.hospital_info),
+  'admin updates hospital info (trimmed, email lower-cased)');
+reset role;
+select t.ok((select updated_by from public.hospital_info) = '00000000-0000-0000-0000-0000000000ad', 'hospital info records who changed it');
+set role anon;
+do $$ begin
+  begin
+    perform updated_by from public.hospital_info;
+    raise exception 'FAIL: anon read hospital_info.updated_by';
+  exception when insufficient_privilege then raise notice 'PASS: who edited hospital info is not public'; end;
+end $$;
+reset role;
+set role authenticated;
+do $$ begin
+  begin
+    update public.hospital_info set email = 'not-an-email' where id = 1;
+    raise exception 'FAIL: invalid email accepted';
+  exception when check_violation then raise notice 'PASS: invalid hospital email is rejected'; end;
+  begin
+    update public.hospital_info set website = 'http://insecure.example' where id = 1;
+    raise exception 'FAIL: http website accepted';
+  exception when check_violation then raise notice 'PASS: hospital website must be https'; end;
+  begin
+    update public.hospital_settings set booking_window_days = 0 where id = 1;
+    raise exception 'FAIL: zero booking window accepted';
+  exception when check_violation then raise notice 'PASS: booking window must be at least a day'; end;
+end $$;
+select t.ok(exists (select 1 from public.admin_audit_log where action = 'hospital_info_updated'
+                    and metadata->'fields' ? 'phone'),
+  'hospital info changes are audited with the changed fields');
+select t.ok((select code from public.check_in_secret) ~ '^[A-Z2-9]{6}$', 'admin reads the 6-character check-in code');
+create temp table old_code as select code from public.check_in_secret;
+grant select on old_code to public;
+select t.ok((public.rotate_check_in_code()->>'success')::boolean, 'admin rotates the check-in code');
+select t.ok((select code from public.check_in_secret) <> (select code from old_code), 'rotating issues a new code');
+select t.ok(exists (select 1 from public.admin_audit_log where action = 'check_in_code_rotated'),
+  'rotating the check-in code is audited');
+reset role;
+
+-- =================================================================== queue: setup
+-- P2/P3 patients, D3 doctor (made directly by the owner).
+reset role;
+select set_config('request.jwt.claims', '', false);
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-0000000000c1', 'p2@x.test', '{"full_name":"Pia"}'),
+  ('00000000-0000-0000-0000-0000000000c2', 'p3@x.test', '{"full_name":"Remi"}'),
+  ('00000000-0000-0000-0000-0000000000d3', 'd3@x.test', '{"full_name":"Doc Three"}');
+update public.profiles set role = 'doctor' where id = '00000000-0000-0000-0000-0000000000d3';
+insert into public.doctors (id, specialty) values ('00000000-0000-0000-0000-0000000000d3', 'GP');
+insert into public.beneficiaries (id, account_holder_id, display_name, relationship, dob, gender) values
+  ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000c1', 'Pia', 'self', '1990-01-01', 'female'),
+  ('00000000-0000-0000-0000-0000000000e2', '00000000-0000-0000-0000-0000000000c2', 'Remi', 'self', '1990-01-01', 'male');
+update public.hospital_settings set time_zone = current_setting('TimeZone'), check_in_opens_minutes = 120 where id = 1;
+insert into public.clinic_sessions (id, doctor_id, session_date, start_time, end_time, capacity) values
+  -- today, all day (check-in open)
+  ('00000000-0000-0000-0000-0000000006a1', '00000000-0000-0000-0000-0000000000d3', current_date, '00:00', '23:59:59', 10),
+  -- in two days (check-in not open yet)
+  ('00000000-0000-0000-0000-0000000006a2', '00000000-0000-0000-0000-0000000000d3', current_date + 2, '09:00', '12:00', 10),
+  -- in 20 days, one place (waitlist)
+  ('00000000-0000-0000-0000-0000000006a3', '00000000-0000-0000-0000-0000000000d3', current_date + 20, '09:00', '12:00', 1),
+  -- 200 days ahead (outside a 60-day booking window)
+  ('00000000-0000-0000-0000-0000000006a4', '00000000-0000-0000-0000-0000000000d3', current_date + 200, '09:00', '12:00', 5),
+  -- yesterday (over: automatic no-show)
+  ('00000000-0000-0000-0000-0000000006a5', '00000000-0000-0000-0000-0000000000d3', current_date - 1, '09:00', '10:00', 5);
+-- Yesterday's booking that never checked in.
+insert into public.appointments (id, patient_id, account_holder_id, beneficiary_id, doctor_id, session_id, appointment_date, start_time, status, appointment_type)
+values ('00000000-0000-0000-0000-0000000007a5', '00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-0000000000c1',
+        '00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000d3',
+        '00000000-0000-0000-0000-0000000006a5', current_date - 1, '09:00', 'confirmed', 'in-clinic');
+create temp table ids (k text primary key, v uuid);
+grant all on ids to public;
+update public.hospital_settings set booking_window_days = 60 where id = 1;
+
+-- =================================================================== booking window
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c1","email":"p2@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.book_session('00000000-0000-0000-0000-0000000006a4', '00000000-0000-0000-0000-0000000000e1')->>'code' = 'OUTSIDE_BOOKING_WINDOW',
+  'booking beyond the booking window is refused');
+select t.ok(not (select is_bookable from public.clinic_session_availability where session_id = '00000000-0000-0000-0000-0000000006a4'),
+  'sessions beyond the booking window are not bookable');
+
+-- =================================================================== check-in
+insert into ids values ('p2_today', (public.book_session('00000000-0000-0000-0000-0000000006a1', '00000000-0000-0000-0000-0000000000e1')->>'appointment_id')::uuid);
+insert into ids values ('p2_later', (public.book_session('00000000-0000-0000-0000-0000000006a2', '00000000-0000-0000-0000-0000000000e1')->>'appointment_id')::uuid);
+select t.ok((select source from public.appointments where id = (select v from ids where k = 'p2_today')) = 'patient',
+  'patient bookings are marked source=patient');
+select t.ok(public.check_in_visit((select v from ids where k = 'p2_today'), 'WRONG1')->>'code' = 'WRONG_CODE',
+  'check-in with the wrong code fails');
+reset role;
+create temp table code as select code from public.check_in_secret;
+grant select on code to public;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c1","email":"p2@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.check_in_visit((select v from ids where k = 'p2_later'), (select code from code))->>'code' = 'CHECK_IN_NOT_OPEN',
+  'check-in before the window opens is refused');
+select t.ok((public.check_in_visit((select v from ids where k = 'p2_today'), lower((select code from code)))->>'queue_number')::int = 1,
+  'patient checks in with the code (case-insensitive) and gets queue number 1');
+select t.ok((public.check_in_visit((select v from ids where k = 'p2_today'), 'anything')->>'already')::boolean,
+  'checking in twice is harmless');
+select t.ok(public.move_session_booking((select v from ids where k = 'p2_today'), '00000000-0000-0000-0000-0000000006a2')->>'code' = 'NOT_MODIFIABLE',
+  'a checked-in booking cannot be moved');
+select t.ok(public.advance_visit((select v from ids where k = 'p2_today'), 'call')->>'code' = 'FORBIDDEN',
+  'patients cannot call themselves in');
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c2","email":"p3@x.test","role":"authenticated"}', false);
+set role authenticated;
+insert into ids values ('p3_today', (public.book_session('00000000-0000-0000-0000-0000000006a1', '00000000-0000-0000-0000-0000000000e2')->>'appointment_id')::uuid);
+select t.ok(public.check_in_visit((select v from ids where k = 'p2_today'), (select code from code))->>'code' = 'FORBIDDEN',
+  'a patient cannot check in someone else''s booking');
+select t.ok(public.get_queue_status((select v from ids where k = 'p2_today'))->>'code' = 'FORBIDDEN',
+  'a patient cannot see someone else''s queue status');
+reset role;
+
+-- Doctor marks P3 arrived (no code needed).
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d3","email":"d3@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.advance_visit((select v from ids where k = 'p3_today'), 'arrive')->>'queue_number')::int = 2,
+  'doctor marks a patient arrived without the code (queue number 2)');
+select t.ok((select waiting = 2 and booked = 2 and not_arrived = 0 from public.clinic_session_progress
+             where session_id = '00000000-0000-0000-0000-0000000006a1'),
+  'session progress counts two waiting');
+do $$ begin
+  begin
+    update public.appointments set queue_number = 99 where id = (select v from ids where k = 'p3_today');
+    raise exception 'FAIL: doctor edited queue number directly';
+  exception when insufficient_privilege then raise notice 'PASS: doctors cannot edit queue fields directly'; end;
+end $$;
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c2","email":"p3@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.get_queue_status((select v from ids where k = 'p3_today'))->>'position')::int = 2,
+  'P3 is second in line');
+select t.ok(not exists (select 1 from public.clinic_session_progress), 'patients cannot read session progress');
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.call_next_in_queue('00000000-0000-0000-0000-0000000006a1')->>'code' = 'FORBIDDEN',
+  'another doctor cannot call patients from this session');
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d3","email":"d3@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.call_next_in_queue('00000000-0000-0000-0000-0000000006a1')->>'appointment_id' = (select v from ids where k = 'p2_today')::text,
+  'call next calls the first to arrive');
+reset role;
+select t.ok((select array_agg(channel order by channel) from public.notification_deliveries
+             where appointment_id = (select v from ids where k = 'p2_today') and event_type = 'queue_called') = array['push', 'sms'],
+  'the called patient gets a push and an SMS');
+select t.ok((select array_agg(channel) from public.notification_deliveries
+             where appointment_id = (select v from ids where k = 'p3_today') and event_type = 'queue_next') = array['push'],
+  'the next patient gets a "you''re next" push');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c2","email":"p3@x.test","role":"authenticated"}', false);
+set role authenticated;
+create temp table qs as select public.get_queue_status((select v from ids where k = 'p3_today')) as q;
+select t.ok((select (q->>'position')::int = 1 and (q->>'now_serving')::int = 1 from qs),
+  'P3 is now first in line and number 1 is being seen');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d3","email":"d3@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.advance_visit((select v from ids where k = 'p2_today'), 'no_show')->>'code' = 'NOT_MODIFIABLE',
+  'a patient who was called cannot be marked a no-show');
+select t.ok((public.advance_visit((select v from ids where k = 'p2_today'), 'complete')->>'success')::boolean,
+  'doctor marks the visit done');
+select t.ok((select status = 'completed' and finished_at is not null from public.appointments where id = (select v from ids where k = 'p2_today')),
+  'finished visits are completed with a finish time');
+select t.ok(public.call_next_in_queue('00000000-0000-0000-0000-0000000006a1')->>'appointment_id' = (select v from ids where k = 'p3_today')::text,
+  'call next moves on to the second patient');
+select t.ok((public.advance_visit((select v from ids where k = 'p3_today'), 'requeue')->>'success')::boolean,
+  'a mistaken call can be undone');
+select t.ok((select called_at is null from public.appointments where id = (select v from ids where k = 'p3_today')),
+  'undoing a call puts the patient back in line');
+select t.ok(public.advance_visit((select v from ids where k = 'p2_later'), 'no_show')->>'code' = 'TOO_EARLY',
+  'a future visit cannot be marked a no-show');
+select t.ok(public.call_next_in_queue('00000000-0000-0000-0000-0000000006a2')->>'code' = 'QUEUE_EMPTY',
+  'call next on an empty queue says so');
+
+do $$ begin
+  begin
+    update public.appointments set finished_at = now() - interval '5 hours' where id = (select v from ids where k = 'p2_today');
+    raise exception 'FAIL: doctor edited finished_at directly';
+  exception when insufficient_privilege then raise notice 'PASS: doctors cannot rewrite visit timings directly'; end;
+  begin
+    update public.appointments set status = 'completed' where id = (select v from ids where k = 'p2_later');
+    raise exception 'FAIL: doctor completed a future visit directly';
+  exception when insufficient_privilege then raise notice 'PASS: doctors cannot mark a future visit seen directly'; end;
+end $$;
+
+-- =================================================================== follow-ups
+select t.ok((public.book_follow_up((select v from ids where k = 'p2_today'), '00000000-0000-0000-0000-0000000006a4', 'Review results')->>'success')::boolean,
+  'doctor books a follow-up (even beyond the patient booking window)');
+reset role;
+select t.ok((select source = 'follow_up' and booked_by = '00000000-0000-0000-0000-0000000000d3' and follow_up_of = (select v from ids where k = 'p2_today')
+                    and account_holder_id = '00000000-0000-0000-0000-0000000000c1' and reason = 'Review results'
+             from public.appointments where session_id = '00000000-0000-0000-0000-0000000006a4'),
+  'follow-up is linked to the original visit and patient');
+select t.ok(exists (select 1 from public.notification_deliveries d join public.appointments a on a.id = d.appointment_id
+                    where a.session_id = '00000000-0000-0000-0000-0000000006a4' and d.event_type = 'follow_up_booked'),
+  'the patient is told about the follow-up');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d1","email":"d@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.book_follow_up((select v from ids where k = 'p2_today'), '00000000-0000-0000-0000-0000000006a2')->>'code' = 'FORBIDDEN',
+  'another doctor cannot book follow-ups for this visit');
+reset role;
+
+-- =================================================================== waitlist
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c1","email":"p2@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.join_waitlist('00000000-0000-0000-0000-0000000006a3', '00000000-0000-0000-0000-0000000000e1')->>'code' = 'SESSION_HAS_PLACES',
+  'no waitlist while a session has places');
+insert into ids values ('p2_full', (public.book_session('00000000-0000-0000-0000-0000000006a3', '00000000-0000-0000-0000-0000000000e1')->>'appointment_id')::uuid);
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c2","email":"p3@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok((public.join_waitlist('00000000-0000-0000-0000-0000000006a3', '00000000-0000-0000-0000-0000000000e2', 'cough')->>'position')::int = 1,
+  'patient joins the waitlist of a full session (first in line)');
+select t.ok(public.join_waitlist('00000000-0000-0000-0000-0000000006a3', '00000000-0000-0000-0000-0000000000e2')->>'code' = 'ALREADY_WAITING',
+  'cannot join the same waitlist twice');
+select t.ok((select position = 1 from public.my_waitlist_entries where session_id = '00000000-0000-0000-0000-0000000006a3'),
+  'patient sees their waitlist place');
+select t.ok((select waitlist_count = 1 from public.clinic_session_availability where session_id = '00000000-0000-0000-0000-0000000006a3'),
+  'availability shows how many are waiting');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c1","email":"p2@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(not exists (select 1 from public.session_waitlist), 'patients cannot see other people''s waitlist entries');
+select t.ok((public.cancel_appointment((select v from ids where k = 'p2_full'))->>'success')::boolean, 'P2 cancels the only place');
+reset role;
+select t.ok((select status = 'booked' and appointment_id is not null from public.session_waitlist
+             where session_id = '00000000-0000-0000-0000-0000000006a3' and beneficiary_id = '00000000-0000-0000-0000-0000000000e2'),
+  'the freed place goes to the first person waiting');
+select t.ok((select source = 'waitlist' and status = 'confirmed' and reason = 'cough' from public.appointments
+             where session_id = '00000000-0000-0000-0000-0000000006a3' and beneficiary_id = '00000000-0000-0000-0000-0000000000e2'),
+  'the waitlist booking is confirmed with their reason');
+select t.ok(exists (select 1 from public.notification_deliveries d join public.appointments a on a.id = d.appointment_id
+                    where a.session_id = '00000000-0000-0000-0000-0000000006a3' and d.event_type = 'waitlist_booked'),
+  'they are told they got the place');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c1","email":"p2@x.test","role":"authenticated"}', false);
+set role authenticated;
+insert into ids values ('p2_wait', (public.join_waitlist('00000000-0000-0000-0000-0000000006a3', '00000000-0000-0000-0000-0000000000e1')->>'entry_id')::uuid);
+select t.ok((public.leave_waitlist((select v from ids where k = 'p2_wait'))->>'success')::boolean, 'patient leaves a waitlist');
+select t.ok(public.leave_waitlist((select v from ids where k = 'p2_wait'))->>'code' = 'NOT_MODIFIABLE', 'leaving twice is refused');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000c2","email":"p3@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.leave_waitlist((select v from ids where k = 'p2_wait'))->>'code' = 'NOT_FOUND', 'cannot leave someone else''s waitlist entry');
+reset role;
+
+-- =================================================================== housekeeping
+reset role;
+select set_config('request.jwt.claims', '', false);
+update public.hospital_settings set auto_no_show = true, no_show_after_minutes = 0 where id = 1;
+-- Yesterday: one patient called in but never marked done, one checked in and never called.
+insert into public.appointments (id, patient_id, account_holder_id, beneficiary_id, doctor_id, session_id, appointment_date, start_time, status, appointment_type, checked_in_at, queue_number, called_at)
+values
+  ('00000000-0000-0000-0000-0000000007b1', '00000000-0000-0000-0000-0000000000c2', '00000000-0000-0000-0000-0000000000c2',
+   '00000000-0000-0000-0000-0000000000e2', '00000000-0000-0000-0000-0000000000d3',
+   '00000000-0000-0000-0000-0000000006a5', current_date - 1, '09:00', 'confirmed', 'in-clinic', now() - interval '1 day', 1, now() - interval '1 day'),
+  ('00000000-0000-0000-0000-0000000007b2', '00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-0000000000a2',
+   '00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000d3',
+   '00000000-0000-0000-0000-0000000006a5', current_date - 1, '09:00', 'confirmed', 'in-clinic', now() - interval '1 day', 2, null);
+select t.ok((public.run_visit_housekeeping()->>'no_shows')::int >= 1, 'housekeeping runs');
+select t.ok((select status = 'no_show' from public.appointments where id = '00000000-0000-0000-0000-0000000007a5'),
+  'a booked patient who never arrived becomes a no-show after the session');
+select t.ok(exists (select 1 from public.notification_deliveries
+                    where appointment_id = '00000000-0000-0000-0000-0000000007a5' and event_type = 'visit_missed'),
+  'the patient is told they missed the visit');
+select t.ok((select status from public.appointments where id = (select v from ids where k = 'p3_today')) = 'confirmed',
+  'visits in a session that is still running are left open');
+select t.ok((select status from public.appointments where id = '00000000-0000-0000-0000-0000000007b1') = 'completed',
+  'a patient called in but never marked done is marked seen after the session');
+select t.ok((select status from public.appointments where id = '00000000-0000-0000-0000-0000000007b2') = 'no_show',
+  'a patient who checked in but was never called is a no-show after the session');
+select t.ok(public.run_visit_housekeeping() ? 'reminders_evening', 'housekeeping reports reminder counts');
+update public.hospital_settings set reminders_enabled = false where id = 1;
+select t.ok((public.run_visit_housekeeping()->>'reminders_morning')::int = 0
+  and (public.run_visit_housekeeping()->>'reminders_evening')::int = 0,
+  'no reminders when they are switched off');
+update public.hospital_settings set reminders_enabled = true where id = 1;
+select t.ok(not has_function_privilege('authenticated', 'public.run_visit_housekeeping()', 'execute'),
+  'clients cannot run housekeeping');
+
+-- =================================================================== reports
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000ad","email":"a@x.test","role":"authenticated"}', false);
+set role authenticated;
+create temp table rep as select public.visit_report(current_date - 7, current_date + 7) as j;
+grant select on rep to public;
+select t.ok(((select j from rep)->>'success')::boolean, 'admin runs the visit report');
+select t.ok(((select j from rep)->'totals'->>'seen')::int >= 1 and ((select j from rep)->'totals'->>'no_show')::int >= 1,
+  'report counts seen visits and no-shows');
+select t.ok(jsonb_array_length((select j from rep)->'doctors') >= 1 and jsonb_array_length((select j from rep)->'days') >= 1,
+  'report breaks down by doctor and by day');
+select t.ok(public.visit_report(current_date, current_date - 1)->>'code' = 'INVALID_INPUT', 'report rejects a backwards range');
+reset role;
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-0000-0000-0000000000d3","email":"d3@x.test","role":"authenticated"}', false);
+set role authenticated;
+select t.ok(public.visit_report(current_date - 7, current_date)->>'code' = 'FORBIDDEN', 'doctors cannot run the admin report');
 reset role;
 
 \echo ALL TESTS PASSED

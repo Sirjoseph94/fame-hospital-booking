@@ -1,5 +1,4 @@
 import {
-  canDoctorMarkVisitComplete,
   doctorProxyTag,
   filterVisitsForDay,
   groupVisitsBySession,
@@ -27,6 +26,7 @@ const visit = (
   beneficiaryName: "Pat",
   accountHolderName: "Pat",
   relationship: "self",
+  source: "patient",
 });
 
 describe("doctor agenda helpers", () => {
@@ -52,6 +52,8 @@ describe("doctor agenda helpers", () => {
       placesLeft: 10,
       status: "scheduled",
       isBookable: true,
+      inBookingWindow: true,
+      waitlistCount: 0,
     });
     const am = session("am", "2026-11-24T09:00:00Z", "2026-11-24T12:00:00Z");
     const pm = session("pm", "2026-11-24T14:00:00Z", "2026-11-24T17:00:00Z");
@@ -80,15 +82,5 @@ describe("doctor agenda helpers", () => {
 
   it("adds no extra group when every visit has a session", () => {
     expect(groupVisitsBySession([], [])).toEqual([]);
-  });
-
-  it("allows completing a visit only once it has started", () => {
-    const now = new Date("2026-11-24T10:00:00Z");
-    expect(canDoctorMarkVisitComplete("2026-11-24T10:00:00Z", now)).toBe(true);
-    expect(canDoctorMarkVisitComplete("2026-11-24T09:30:00Z", now)).toBe(true);
-    expect(canDoctorMarkVisitComplete("2026-11-23T15:00:00Z", now)).toBe(true);
-    // Later the same day is not completable yet.
-    expect(canDoctorMarkVisitComplete("2026-11-24T15:00:00Z", now)).toBe(false);
-    expect(canDoctorMarkVisitComplete("2026-11-25T09:00:00Z", now)).toBe(false);
   });
 });

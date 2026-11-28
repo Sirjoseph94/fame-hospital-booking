@@ -2,9 +2,11 @@ import { Pressable, Text, View } from "react-native";
 import { usePathname, useRouter } from "expo-router";
 import {
   CalendarRange,
-  ChartNoAxesColumn,
+  ChartColumn,
   Contact,
   History,
+  Hospital,
+  Settings,
   UsersRound,
 } from "lucide-react-native";
 
@@ -13,16 +15,22 @@ import { colors } from "@/lib/theme-colors";
 const links = [
   { href: "/roster", label: "Roster", Icon: UsersRound },
   { href: "/appointments", label: "Appointments", Icon: CalendarRange },
-  { href: "/capacity", label: "Capacity", Icon: ChartNoAxesColumn },
+  { href: "/capacity", label: "Clinics", Icon: Hospital },
   { href: "/patients", label: "Patients", Icon: Contact },
+  { href: "/reports", label: "Reports", Icon: ChartColumn },
   { href: "/activity", label: "Activity", Icon: History },
+  { href: "/settings", label: "Settings", Icon: Settings },
 ] as const;
 
 function isActivePath(pathname: string, href: string): boolean {
-  if (pathname === href) {
+  if (pathname === href || pathname.startsWith(`${href}/`)) {
     return true;
   }
-  return pathname.endsWith(href);
+  // Session queues belong to Clinics; doctor schedules to the roster.
+  if (href === "/capacity" && pathname.startsWith("/session/")) return true;
+  if (href === "/roster" && pathname.startsWith("/doctor/")) return true;
+  if (href === "/patients" && pathname.startsWith("/patient/")) return true;
+  return false;
 }
 
 export function AdminSideNav() {

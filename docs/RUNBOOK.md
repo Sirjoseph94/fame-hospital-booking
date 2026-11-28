@@ -69,6 +69,10 @@ The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). 
 | 20 | [`20261128000400_validate_time_zone.sql`](../supabase/migrations/20261128000400_validate_time_zone.sql) | Trigger rejecting unknown `hospital_settings.time_zone` values (an invalid zone would break every session check) |
 | 21 | [`20261128000500_admin_notification_deliveries.sql`](../supabase/migrations/20261128000500_admin_notification_deliveries.sql) | Admins read `notification_deliveries`; `retry_notification_delivery` resets a failed row for the §12 retry sweep. **Redeploy `dispatch-notifications`** (room and cancellation reason in messages) |
 | 22 | [`20261128000600_remove_legacy_slots.sql`](../supabase/migrations/20261128000600_remove_legacy_slots.sql) | **Removes the retired slot system**: tables `appointment_slots`, `slot_holds`, `blackout_rules`, view `doctor_next_available_slots`, the seven slot/hold RPCs, the pg_cron hold sweep, `appointments.slot_id` and `hospital_settings.buffer_minutes`. **Deletes slot/hold/blackout data.** Older bookings keep their date and time. Steps 2, 7, 8, 10 and 13 created these; they still run in order on a new database |
+| 23 | [`20261129000000_hospital_info_and_settings.sql`](../supabase/migrations/20261129000000_hospital_info_and_settings.sql) | `hospital_info` (public contact details, admin-edited in **Settings**; phone/email start empty), platform settings on `hospital_settings` (booking window, check-in, reminders, no-shows, waitlist), `check_in_secret` + `rotate_check_in_code()`; changes are audited. See §6b |
+| 24 | [`20261129000100_visit_queue.sql`](../supabase/migrations/20261129000100_visit_queue.sql) | **Arrival queue**: status `no_show`; check-in/queue columns; `check_in_visit`, `advance_visit`, `call_next_in_queue`, `get_queue_status`, `book_follow_up`; `clinic_session_progress` view; booking window enforced. **Redeploy `dispatch-notifications`** (new message types, push deep links) |
+| 25 | [`20261129000200_reminders_and_waitlist.sql`](../supabase/migrations/20261129000200_reminders_and_waitlist.sql) | Reminders (evening before, morning of), automatic no-shows and waitlist expiry via `run_visit_housekeeping()` every 10 min (**needs pg_cron**, see §6b); `session_waitlist` with automatic booking when a place frees up; availability views gain `waitlist_count` / `in_booking_window` |
+| 26 | [`20261129000300_visit_reports.sql`](../supabase/migrations/20261129000300_visit_reports.sql) | `visit_report(from, to)`: attendance, no-show rate and waiting times for admins (**Reports**) |
 
 ### 2a. Existing databases (set up through the SQL Editor)
 
@@ -195,13 +199,48 @@ Booking is by **clinic session**, first come, first served. A session is a docto
 
 Capacity is a live count of non-cancelled bookings, checked under a row lock on the session, so the last place can't be sold twice. Clients cannot write `clinic_sessions` or change `appointments.session_id` directly.
 
-**Set the hospital time zone** (session times are local wall-clock times; the database runs in UTC). It decides when a session has "ended" for booking. Admins can set it on **Roster → Hospital time zone**, or in SQL:
+**Set the hospital time zone** (session times are local wall-clock times; the database runs in UTC). It decides when a session has "ended" for booking. Admins can set it in **Settings → Hospital time zone**, or in SQL:
 
 ```sql
 update public.hospital_settings set time_zone = 'Africa/Lagos' where id = 1;  -- your IANA zone
 ```
 
 The older slot, hold and blackout system was removed by step 22.
+
+## 6b. Hospital details, check-in, queue, reminders, waitlist (steps 23–26)
+
+**After deploying, an admin opens Settings and:**
+
+1. Fills in **Hospital information** (name, phone, email, address, opening hours). They appear on the About screen, the Privacy Policy, Terms and the account deletion page, and in message subjects. App stores require a working contact.
+2. Checks **Booking & visits**: booking window (default 60 days), check-in opening (120 min before a session), reminders (6 PM the evening before, 7 AM on the day), automatic no-shows (30 min after a session ends) and the waitlist. All are in the hospital time zone.
+3. Prints the **Check-in poster** and puts it at reception. Patients scan it in the app (or type the 6-character code) to join the queue. **New code** invalidates the old poster immediately.
+
+**Visit flow on the day**
+
+| Step | Who | How |
+|---|---|---|
+| Check in | Patient (code) or staff (no code) | `check_in_visit` — opens `check_in_opens_minutes` before the session, closes at its end; assigns the next queue number |
+| Call in | Doctor / admin | **Call next** (`call_next_in_queue`) or per patient (`advance_visit … 'call'`). The patient gets a push + SMS ("It's your turn"); whoever is now first in line gets "You're next" (push) |
+| Seen / no-show | Doctor / admin | `advance_visit … 'complete' / 'no_show'` (only once the session has started or the patient has checked in) |
+| Follow-up | Doctor / admin | `book_follow_up` into a future session of the same doctor (ignores the booking window and "accepting bookings") |
+
+Reception staff use admin accounts: **Clinics → Open queue** marks patients without the app as arrived.
+
+**Known limitation:** the poster code is static, so someone who photographed it could check in before arriving (within the check-in window). Keep the check-in window short, issue a **New code** if it circulates, and treat the queue number as advisory if staff see someone arrive later than their check-in.
+
+At the end of each session (plus the grace period, if automatic no-shows are on) housekeeping closes anything still open: called-in patients become **seen**, booked or checked-in-but-never-called patients become **no-shows**. Waitlists close when the session starts.
+
+**Scheduled housekeeping (pg_cron).** Step 25 schedules `select public.run_visit_housekeeping()` every 10 minutes **only if pg_cron is enabled** (Dashboard → Database → Extensions → `pg_cron`; then re-run step 25). Without it no reminders are sent and no-shows are not recorded automatically (the migration prints a notice). Check it is scheduled:
+
+```sql
+select jobname, schedule from cron.job where jobname = 'visit-housekeeping';
+```
+
+Messages still go through `notification_deliveries` → Database Webhook → `dispatch-notifications`, so the §12 webhook and retry sweep must be set up too.
+
+**Waitlist.** When a session is full, patients can join its waitlist (`join_waitlist`) until it starts. When a place frees up before the start (cancellation, a booking moved away, a higher patient limit) the first person waiting is booked automatically (`source = 'waitlist'`) and told. Waitlists close when the session starts or is cancelled.
+
+Time-sensitive messages that are retried too late ("it's your turn" after 10 minutes, "you're next" after 15, same-day reminders after 4 hours) are skipped rather than sent.
 
 ## 7. Security notes
 

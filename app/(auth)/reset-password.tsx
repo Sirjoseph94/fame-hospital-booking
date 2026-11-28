@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
@@ -11,6 +10,7 @@ import { useForm } from "react-hook-form";
 import { Link, router } from "expo-router";
 import { z } from "zod";
 
+import { PageScrollView } from "@/components/ui/page-scroll-view";
 import { Card } from "@/components/ui/card";
 import { FormTextField } from "@/components/ui/form-text-field";
 import { authService } from "@/lib/services/auth";
@@ -94,7 +94,7 @@ export default function ResetPasswordScreen() {
   };
 
   return (
-    <ScrollView
+    <PageScrollView
       className="flex-1 bg-surface-muted"
       contentContainerClassName="min-h-full items-center justify-center px-4 py-10"
       contentInsetAdjustmentBehavior="automatic"
@@ -175,6 +175,6 @@ export default function ResetPasswordScreen() {
           )}
         </Card>
       </View>
-    </ScrollView>
+    </PageScrollView>
   );
 }

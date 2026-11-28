@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { SchedulingStatePanel } from "@/components/ui/scheduling-state-panel";
 import { useBookSession } from "@/lib/queries/appointments";
 import { useBeneficiaries } from "@/lib/queries/beneficiaries";
+import { useHospitalInfo } from "@/lib/queries/hospital-info";
 import { exportAppointmentToCalendar } from "@/lib/services/calendarExport";
 import {
   SchedulingError,
@@ -26,10 +27,11 @@ import { colors } from "@/lib/theme-colors";
 import type { Appointment } from "@/types/scheduling";
 
 const ARRIVAL_NOTE =
-  "Patients are seen in order of arrival during the session. Come early and check in at reception.";
+  "Patients are seen in order of arrival during the session. When you arrive, check in with the app by scanning the code at reception.";
 
 export default function BookConfirmationScreen() {
   const session = useSessionStore((state) => state.session);
+  const { data: hospitalInfo } = useHospitalInfo();
   const draft = useBookingStore();
   const resetBookingDraft = useBookingStore((state) => state.resetBookingDraft);
   const setDraftSession = useBookingStore((state) => state.setSession);
@@ -105,6 +107,8 @@ export default function BookConfirmationScreen() {
       type: booked.type,
       room: booked.room,
       note: ARRIVAL_NOTE,
+      hospitalName: hospitalInfo?.name,
+      hospitalAddress: hospitalInfo?.address,
     });
     setCalendarMessage(result.ok ? "Added to your calendar." : result.message);
     AccessibilityInfo.announceForAccessibility(
@@ -136,7 +140,7 @@ export default function BookConfirmationScreen() {
               ) : null}
               {booked.room ? (
                 <Text className="text-sm text-ink" selectable>
-                  {booked.room}
+                  {/^\d/.test(booked.room) ? `Room ${booked.room}` : booked.room}
                 </Text>
               ) : null}
               {beneficiaryName ? (
@@ -147,7 +151,7 @@ export default function BookConfirmationScreen() {
             </View>
             <Text className="text-sm leading-5 text-ink">{ARRIVAL_NOTE}</Text>
             <Text className="text-xs text-ink-muted" selectable>
-              Booking reference: {booked.id}
+              Booking reference: {booked.id.slice(0, 8).toUpperCase()}
             </Text>
             <Pressable
               accessibilityLabel="Add to calendar"
@@ -162,6 +166,17 @@ export default function BookConfirmationScreen() {
                 {calendarMessage}
               </Text>
             ) : null}
+            <Pressable
+              accessibilityLabel="View this visit"
+              accessibilityRole="button"
+              className="min-h-12 w-full items-center justify-center rounded-xl border border-primary px-4 web:hover:opacity-90"
+              onPress={() => {
+                resetBookingDraft();
+                router.replace({ pathname: "/visit/[id]", params: { id: booked.id } });
+              }}
+            >
+              <Text className="font-semibold text-primary">View visit</Text>
+            </Pressable>
             <Pressable
               accessibilityLabel="Return to home"
               accessibilityRole="button"

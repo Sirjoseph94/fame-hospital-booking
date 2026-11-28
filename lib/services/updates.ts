@@ -96,6 +96,20 @@ export function updateTitle(eventType: string): string {
       return "Visit moved";
     case "visit_completed":
       return "Visit completed";
+    case "visit_missed":
+      return "Visit missed";
+    case "queue_called":
+      return "Your turn";
+    case "queue_next":
+      return "You're next";
+    case "reminder_day_before":
+      return "Reminder: visit tomorrow";
+    case "reminder_same_day":
+      return "Reminder: visit today";
+    case "follow_up_booked":
+      return "Follow-up booked";
+    case "waitlist_booked":
+      return "Place from the waitlist";
     default:
       return "Update";
   }

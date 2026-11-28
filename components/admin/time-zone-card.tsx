@@ -47,8 +47,9 @@ export function TimeZoneCard() {
     <Card style={{ gap: 12 }}>
       <Text className="text-base font-semibold text-ink">Hospital time zone</Text>
       <Text className="text-sm text-ink-muted">
-        Session times are local clock times. This decides when a session has
-        ended and can no longer be booked.
+        Session times are the hospital&apos;s local clock times. This decides when check-in
+        opens, when a session has ended, and when reminders go out. Staff and patients
+        should keep their devices on this zone.
       </Text>
       {settingsQuery.isPending ? (
         <ActivityIndicator color={colors.primary} />
@@ -69,7 +70,7 @@ export function TimeZoneCard() {
                 accessibilityLabel={`Use ${zone}`}
                 accessibilityRole="button"
                 className={[
-                  "min-h-10 justify-center rounded-full border px-3",
+                  "min-h-11 justify-center rounded-full border px-3",
                   value === zone ? "border-primary bg-primary" : "border-ink-muted bg-surface",
                 ].join(" ")}
                 onPress={() => setDraft(zone)}

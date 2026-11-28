@@ -4,7 +4,6 @@
 import * as Calendar from "expo-calendar/legacy";
 
 import { isNative, isWeb } from "@/lib/platform";
-import { hospitalInfo } from "@/lib/hospital-info";
 import type { AppointmentType } from "@/types/scheduling";
 
 export interface CalendarExportInput {
@@ -16,6 +15,9 @@ export interface CalendarExportInput {
   room?: string;
   /** Extra line for the event description. */
   note?: string;
+  /** From hospital_info (admin-managed). */
+  hospitalName?: string;
+  hospitalAddress?: string;
 }
 
 /** UTC "yyyyMMddTHHmmssZ" (the trailing Z means the time must be UTC). */
@@ -23,33 +25,52 @@ export function toIcsDate(iso: string): string {
   return new Date(iso).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 }
 
-function buildIcsContent(input: CalendarExportInput): string {
+/** RFC 5545 text escaping (backslash, semicolon, comma, newline). */
+export function escapeIcsText(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
+}
+
+/** "Room 4" for a bare number, otherwise the room as written ("Clinic B"). */
+export function roomLabel(room: string): string {
+  return /^\d/.test(room.trim()) ? `Room ${room.trim()}` : room.trim();
+}
+
+/** Event location: room, hospital name and address, whichever are known. */
+export function eventLocation(input: CalendarExportInput): string {
+  return [input.room ? roomLabel(input.room) : null, input.hospitalName, input.hospitalAddress]
+    .filter((part): part is string => Boolean(part && part.trim()))
+    .join(", ");
+}
+
+export function buildIcsContent(input: CalendarExportInput, now = new Date()): string {
   const start = new Date(input.startsAt);
   const end = new Date(start.getTime() + input.durationMin * 60_000);
-  const description = [
-    `Appointment ID: ${input.appointmentId}`,
-    `Visit type: ${input.type}`,
-    input.room ? `Room: ${input.room}` : null,
-    input.note ?? null,
-    hospitalInfo.about,
-  ]
+  const description = [input.note, `Appointment ID: ${input.appointmentId}`]
     .filter(Boolean)
-    .join("\\n");
+    .join("\n");
+  const location = eventLocation(input);
 
   return [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//FAME Hospital Booking//EN",
     "BEGIN:VEVENT",
-    `UID:${input.appointmentId}@famehospital.example`,
-    `DTSTAMP:${toIcsDate(new Date().toISOString())}`,
+    `UID:${input.appointmentId}@fame-hospital-booking`,
+    `DTSTAMP:${toIcsDate(now.toISOString())}`,
     `DTSTART:${toIcsDate(input.startsAt)}`,
     `DTEND:${toIcsDate(end.toISOString())}`,
-    `SUMMARY:${input.title}`,
-    `DESCRIPTION:${description}`,
+    `SUMMARY:${escapeIcsText(input.title)}`,
+    `DESCRIPTION:${escapeIcsText(description)}`,
+    location ? `LOCATION:${escapeIcsText(location)}` : null,
     "END:VEVENT",
     "END:VCALENDAR",
-  ].join("\r\n");
+  ]
+    .filter(Boolean)
+    .join("\r\n");
 }
 
 function downloadIcs(filename: string, contents: string): void {
@@ -78,36 +99,36 @@ export async function exportAppointmentToCalendar(
     return { ok: false, message: "Calendar export is unavailable on this platform." };
   }
 
-  const permission = await Calendar.requestCalendarPermissionsAsync();
-  if (!permission.granted) {
-    return {
-      ok: false,
-      message: "Calendar permission denied. Use the appointment details to add the visit manually.",
-    };
+  try {
+    const permission = await Calendar.requestCalendarPermissionsAsync();
+    if (!permission.granted) {
+      return {
+        ok: false,
+        message:
+          "Calendar access is off. Allow it in Settings, or add the visit to your calendar yourself.",
+      };
+    }
+
+    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const target =
+      calendars.find((calendar) => calendar.isPrimary && calendar.allowsModifications) ??
+      calendars.find((calendar) => calendar.allowsModifications);
+    if (!target) {
+      return { ok: false, message: "No calendar on this device accepts new events." };
+    }
+
+    const startDate = new Date(input.startsAt);
+    const endDate = new Date(startDate.getTime() + input.durationMin * 60_000);
+
+    await Calendar.createEventAsync(target.id, {
+      title: input.title,
+      startDate,
+      endDate,
+      notes: [input.note, `Appointment ID: ${input.appointmentId}`].filter(Boolean).join("\n"),
+      location: eventLocation(input) || undefined,
+    });
+    return { ok: true };
+  } catch {
+    return { ok: false, message: "Could not add the visit to your calendar." };
   }
-
-  const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-  const target =
-    calendars.find((calendar) => calendar.isPrimary) ?? calendars[0];
-  if (!target) {
-    return {
-      ok: false,
-      message: "No writable calendar found on this device.",
-    };
-  }
-
-  const startDate = new Date(input.startsAt);
-  const endDate = new Date(startDate.getTime() + input.durationMin * 60_000);
-
-  await Calendar.createEventAsync(target.id, {
-    title: input.title,
-    startDate,
-    endDate,
-    notes: [`Appointment ID: ${input.appointmentId}`, input.note]
-      .filter(Boolean)
-      .join("\n"),
-    location: input.room ? `Room ${input.room}` : hospitalInfo.name,
-  });
-
-  return { ok: true };
 }
