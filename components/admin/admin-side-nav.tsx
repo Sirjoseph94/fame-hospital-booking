@@ -58,7 +58,9 @@ export function AdminSideNav() {
                 "min-h-12 flex-row items-center gap-3 rounded-xl px-3 web:hover:bg-surface-muted",
                 selected ? "bg-surface-muted" : "",
               ].join(" ")}
-              onPress={() => router.push(href)}
+              // navigate, not push: going back to a tab section returns to the
+              // existing tabs instead of stacking another copy on top.
+              onPress={() => router.navigate(href)}
             >
               <View className={selected ? "text-primary" : "text-ink-muted"}>
                 <Icon color={selected ? colors.primary : colors["ink-muted"]} size={20} />

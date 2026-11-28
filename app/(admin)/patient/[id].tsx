@@ -119,7 +119,10 @@ export default function AdminPatientScreen() {
             <Detail label="Phone" value={patient.phone} />
             <Detail label="Address" value={patient.address} />
             <Detail label="Emergency contact" value={patient.emergencyContact} />
-            <Detail label="Joined" value={format(parseISO(patient.createdAt), "MMM d, yyyy")} />
+            <Detail
+              label="Joined"
+              value={patient.createdAt ? format(parseISO(patient.createdAt), "MMM d, yyyy") : undefined}
+            />
             <Pressable
               accessibilityLabel={patient.isActive ? "Deactivate account" : "Reactivate account"}
               accessibilityRole="button"

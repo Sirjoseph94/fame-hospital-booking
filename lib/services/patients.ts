@@ -16,7 +16,8 @@ export interface PatientListItem {
   fullName: string;
   phone?: string;
   isActive: boolean;
-  createdAt: string;
+  /** Missing for profiles without a created_at (the column is nullable). */
+  createdAt?: string;
 }
 
 export interface PatientRecord extends PatientListItem {
@@ -33,7 +34,7 @@ interface ProfileRow {
   full_name: string;
   phone: string | null;
   is_active: boolean;
-  created_at: string;
+  created_at: string | null;
   address?: string | null;
   emergency_contact_name?: string | null;
   emergency_contact_phone?: string | null;
@@ -52,7 +53,7 @@ function mapListItem(row: ProfileRow): PatientListItem {
     fullName: row.full_name,
     phone: row.phone?.trim() || undefined,
     isActive: row.is_active,
-    createdAt: row.created_at,
+    createdAt: row.created_at ?? undefined,
   };
 }
 
