@@ -93,8 +93,11 @@ export default function AdminPatientsScreen() {
                   ) : null}
                 </View>
                 <Text className="text-sm text-ink-muted">
-                  {patient.phone ?? "No phone"} · joined{" "}
-                  {format(parseISO(patient.createdAt), "MMM d, yyyy")}
+                  {patient.phone ?? "No phone"}
+                  {/* profiles.created_at is nullable; never crash the list on it. */}
+                  {patient.createdAt
+                    ? ` · joined ${format(parseISO(patient.createdAt), "MMM d, yyyy")}`
+                    : ""}
                 </Text>
               </Card>
             </Pressable>
