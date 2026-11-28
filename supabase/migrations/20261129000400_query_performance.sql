@@ -27,44 +27,67 @@
 
 -- -------------------------------------------------------------------------
 -- 1. RLS policies
+--
+-- Dropped and recreated (not ALTERed) so this also works on databases that
+-- drifted from the migration files, e.g. ones set up by pasting files into
+-- the SQL Editor that skipped 20260319000000_doctor_appointment_context.sql:
+-- any policy missing there is created here with its intended rule. Each
+-- drop/create pair runs in the migration's transaction, so there is never a
+-- moment without the policy.
 -- -------------------------------------------------------------------------
 
 -- admin_audit_log
-alter policy "Admins read audit log" on public.admin_audit_log
+drop policy if exists "Admins read audit log" on public.admin_audit_log;
+create policy "Admins read audit log" on public.admin_audit_log
+  for select
   to authenticated
   using ((select public.current_role()) = 'admin');
 
 -- appointments
-alter policy "Admins manage all appointments" on public.appointments
+drop policy if exists "Admins manage all appointments" on public.appointments;
+create policy "Admins manage all appointments" on public.appointments
+  for all
   to authenticated
   using ((select public.current_role()) = 'admin');
 
-alter policy "Doctors view own appointments" on public.appointments
+drop policy if exists "Doctors view own appointments" on public.appointments;
+create policy "Doctors view own appointments" on public.appointments
+  for select
   to authenticated
   using (doctor_id = (select auth.uid()));
 
-alter policy "Patients view own appointments" on public.appointments
+drop policy if exists "Patients view own appointments" on public.appointments;
+create policy "Patients view own appointments" on public.appointments
+  for select
   to authenticated
   using (
     patient_id = (select auth.uid())
     or account_holder_id = (select auth.uid())
   );
 
-alter policy "Doctors update own appointments" on public.appointments
+drop policy if exists "Doctors update own appointments" on public.appointments;
+create policy "Doctors update own appointments" on public.appointments
+  for update
   to authenticated
   using (doctor_id = (select auth.uid()));
 
 -- beneficiaries
-alter policy "Account holders manage beneficiaries" on public.beneficiaries
+drop policy if exists "Account holders manage beneficiaries" on public.beneficiaries;
+create policy "Account holders manage beneficiaries" on public.beneficiaries
+  for all
   to authenticated
   using (account_holder_id = (select auth.uid()))
   with check (account_holder_id = (select auth.uid()));
 
-alter policy "Admins view all beneficiaries" on public.beneficiaries
+drop policy if exists "Admins view all beneficiaries" on public.beneficiaries;
+create policy "Admins view all beneficiaries" on public.beneficiaries
+  for select
   to authenticated
   using ((select public.current_role()) = 'admin');
 
-alter policy "Doctors view appointment beneficiaries" on public.beneficiaries
+drop policy if exists "Doctors view appointment beneficiaries" on public.beneficiaries;
+create policy "Doctors view appointment beneficiaries" on public.beneficiaries
+  for select
   to authenticated
   using (
     (select public.current_role()) = 'doctor'
@@ -77,65 +100,91 @@ alter policy "Doctors view appointment beneficiaries" on public.beneficiaries
   );
 
 -- check_in_secret
-alter policy "Admins read check-in code" on public.check_in_secret
+drop policy if exists "Admins read check-in code" on public.check_in_secret;
+create policy "Admins read check-in code" on public.check_in_secret
+  for select
   to authenticated
   using ((select public.current_role()) = 'admin');
 
 -- doctor_invites
-alter policy "Admins manage all doctor_invites" on public.doctor_invites
+drop policy if exists "Admins manage all doctor_invites" on public.doctor_invites;
+create policy "Admins manage all doctor_invites" on public.doctor_invites
+  for all
   to authenticated
   using ((select public.current_role()) = 'admin');
 
 -- doctors
-alter policy "Admins can manage doctors" on public.doctors
+drop policy if exists "Admins can manage doctors" on public.doctors;
+create policy "Admins can manage doctors" on public.doctors
+  for all
   to authenticated
   using ((select public.current_role()) = 'admin');
 
 -- Was `auth.role() = 'authenticated'` for every role; the role scope says it.
-alter policy "Anyone authenticated can view doctors" on public.doctors
+drop policy if exists "Anyone authenticated can view doctors" on public.doctors;
+create policy "Anyone authenticated can view doctors" on public.doctors
+  for select
   to authenticated
   using (true);
 
-alter policy "Doctors can update own record" on public.doctors
+drop policy if exists "Doctors can update own record" on public.doctors;
+create policy "Doctors can update own record" on public.doctors
+  for update
   to authenticated
   using (id = (select auth.uid()));
 
 -- hospital_info
-alter policy "Admins update hospital info" on public.hospital_info
+drop policy if exists "Admins update hospital info" on public.hospital_info;
+create policy "Admins update hospital info" on public.hospital_info
+  for update
   to authenticated
   using ((select public.current_role()) = 'admin')
   with check ((select public.current_role()) = 'admin');
 
 -- hospital_settings
-alter policy "Authenticated read settings" on public.hospital_settings
+drop policy if exists "Authenticated read settings" on public.hospital_settings;
+create policy "Authenticated read settings" on public.hospital_settings
+  for select
   to authenticated
   using (true);
 
-alter policy "Admins update settings" on public.hospital_settings
+drop policy if exists "Admins update settings" on public.hospital_settings;
+create policy "Admins update settings" on public.hospital_settings
+  for update
   to authenticated
   using ((select public.current_role()) = 'admin');
 
 -- notification_deliveries
-alter policy "Admins read notification deliveries" on public.notification_deliveries
+drop policy if exists "Admins read notification deliveries" on public.notification_deliveries;
+create policy "Admins read notification deliveries" on public.notification_deliveries
+  for select
   to authenticated
   using ((select public.current_role()) = 'admin');
 
-alter policy "Recipients view own notification deliveries" on public.notification_deliveries
+drop policy if exists "Recipients view own notification deliveries" on public.notification_deliveries;
+create policy "Recipients view own notification deliveries" on public.notification_deliveries
+  for select
   to authenticated
   using (recipient_id = (select auth.uid()));
 
 -- notification_preferences
-alter policy "Users manage own notification preferences" on public.notification_preferences
+drop policy if exists "Users manage own notification preferences" on public.notification_preferences;
+create policy "Users manage own notification preferences" on public.notification_preferences
+  for all
   to authenticated
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
 
 -- profiles
-alter policy "Admins can view all profiles" on public.profiles
+drop policy if exists "Admins can view all profiles" on public.profiles;
+create policy "Admins can view all profiles" on public.profiles
+  for select
   to authenticated
   using ((select public.current_role()) = 'admin');
 
-alter policy "Doctors view appointment holder profiles" on public.profiles
+drop policy if exists "Doctors view appointment holder profiles" on public.profiles;
+create policy "Doctors view appointment holder profiles" on public.profiles
+  for select
   to authenticated
   using (
     (select public.current_role()) = 'doctor'
@@ -147,31 +196,43 @@ alter policy "Doctors view appointment holder profiles" on public.profiles
     )
   );
 
-alter policy "Users can view own profile" on public.profiles
+drop policy if exists "Users can view own profile" on public.profiles;
+create policy "Users can view own profile" on public.profiles
+  for select
   to authenticated
   using (id = (select auth.uid()));
 
-alter policy "Admins can update any profile" on public.profiles
+drop policy if exists "Admins can update any profile" on public.profiles;
+create policy "Admins can update any profile" on public.profiles
+  for update
   to authenticated
   using ((select public.current_role()) = 'admin');
 
-alter policy "Users can update own profile" on public.profiles
+drop policy if exists "Users can update own profile" on public.profiles;
+create policy "Users can update own profile" on public.profiles
+  for update
   to authenticated
   using (id = (select auth.uid()))
   with check (id = (select auth.uid()));
 
 -- push_device_tokens
-alter policy "Users manage own push tokens" on public.push_device_tokens
+drop policy if exists "Users manage own push tokens" on public.push_device_tokens;
+create policy "Users manage own push tokens" on public.push_device_tokens
+  for all
   to authenticated
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
 
 -- session_waitlist
-alter policy "Holders read own waitlist entries" on public.session_waitlist
+drop policy if exists "Holders read own waitlist entries" on public.session_waitlist;
+create policy "Holders read own waitlist entries" on public.session_waitlist
+  for select
   to authenticated
   using (account_holder_id = (select auth.uid()));
 
-alter policy "Staff read waitlists" on public.session_waitlist
+drop policy if exists "Staff read waitlists" on public.session_waitlist;
+create policy "Staff read waitlists" on public.session_waitlist
+  for select
   to authenticated
   using (
     (select public.current_role()) = 'admin'
