@@ -1,5 +1,10 @@
 # Pre-deployment gap implementation plan
 
+> **Historical document.** This plan describes the original one-patient-per-slot
+> booking model (holds, blackouts, post-visit buffers), which was replaced by
+> first-come-first-served clinic sessions and removed in migration 22. For how the
+> app works today see [README.md](README.md) and [docs/RUNBOOK.md](docs/RUNBOOK.md).
+
 **Target:** Web pilot (Supabase + hosted web)  
 **Decisions locked in:**
 

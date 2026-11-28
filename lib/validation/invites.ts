@@ -45,7 +45,6 @@ export const doctorInviteFormSchema = z.object({
     ),
 });
 
-export type DoctorInviteFormFields = z.infer<typeof doctorInviteFormSchema>;
 
 export const doctorClaimCodeSchema = z.object({
   code: z

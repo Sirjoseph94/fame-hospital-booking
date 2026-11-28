@@ -68,6 +68,7 @@ The target is `SUPABASE_DB_URL` from your shell or `.env.migrate` (gitignored). 
 | 19 | [`20261128000300_remove_family_members.sql`](../supabase/migrations/20261128000300_remove_family_members.sql) | `beneficiaries.archived_at`; `remove_beneficiary` (not "self", not with upcoming visits); `book_session` refuses removed family members |
 | 20 | [`20261128000400_validate_time_zone.sql`](../supabase/migrations/20261128000400_validate_time_zone.sql) | Trigger rejecting unknown `hospital_settings.time_zone` values (an invalid zone would break every session check) |
 | 21 | [`20261128000500_admin_notification_deliveries.sql`](../supabase/migrations/20261128000500_admin_notification_deliveries.sql) | Admins read `notification_deliveries`; `retry_notification_delivery` resets a failed row for the §12 retry sweep. **Redeploy `dispatch-notifications`** (room and cancellation reason in messages) |
+| 22 | [`20261128000600_remove_legacy_slots.sql`](../supabase/migrations/20261128000600_remove_legacy_slots.sql) | **Removes the retired slot system**: tables `appointment_slots`, `slot_holds`, `blackout_rules`, view `doctor_next_available_slots`, the seven slot/hold RPCs, the pg_cron hold sweep, `appointments.slot_id` and `hospital_settings.buffer_minutes`. **Deletes slot/hold/blackout data.** Older bookings keep their date and time. Steps 2, 7, 8, 10 and 13 created these; they still run in order on a new database |
 
 ### 2a. Existing databases (set up through the SQL Editor)
 
@@ -92,10 +93,10 @@ New migrations: create them with `npm run db:new -- <name>` (names them `YYYYMMD
 select table_name from information_schema.tables
 where table_schema = 'public'
   and table_name in (
-    'profiles', 'doctors', 'appointment_slots', 'appointments',
-    'beneficiaries', 'slot_holds', 'doctor_invites', 'hospital_settings',
+    'profiles', 'doctors', 'clinic_sessions', 'appointments',
+    'beneficiaries', 'doctor_invites', 'hospital_settings',
     'notification_preferences', 'push_device_tokens', 'notification_deliveries',
-    'blackout_rules', 'admin_audit_log'
+    'admin_audit_log'
   )
 order by 1;
 ```
@@ -200,52 +201,33 @@ Capacity is a live count of non-cancelled bookings, checked under a row lock on 
 update public.hospital_settings set time_zone = 'Africa/Lagos' where id = 1;  -- your IANA zone
 ```
 
-The older slot, hold and blackout tables and RPCs below (§7) are no longer used by the app. They are left in place; a later migration can drop them.
+The older slot, hold and blackout system was removed by step 22.
 
-## 7. Security notes (I-21, I-22) — Phase 7
+## 7. Security notes
 
-After migration **step 8** (`20260919000000_phase7_slot_security.sql`), patient slot transitions use **SECURITY DEFINER RPCs** instead of a broad UPDATE policy:
-
-| RPC | Purpose |
-|-----|---------|
-| `hold_slot_if_available` | Atomic hold when slot is `available` or already held by caller |
-| `release_slot_hold` | Caller releases their hold |
-| `book_held_slot` | Caller’s valid hold → `booked` |
-| `free_orphan_booked_slot` | `booked` → `available` when no pending/confirmed appointment references the slot (cancel / reschedule) |
-| `cleanup_expired_slot_holds` | Expired holds + `held` → `available` (called by `hold_slot_if_available`; scheduled every minute by pg_cron after step 10 if the extension is enabled) |
-
-The policy **“Authenticated users update slots for booking”** is **dropped**. Doctors and admins still manage slots via existing doctor/admin RLS policies (schedule, blackouts).
-
-**Admin audit:** table `admin_audit_log` (admins read-only via RLS) records `doctor_invite_created`, `doctor_invite_revoked`, `profile_deactivated`, and `profile_reactivated` via triggers.
-
-**Deploy note:** Apply step 8 **before** shipping a client build that calls these RPCs. Older app versions against a DB without step 8 still rely on the broad UPDATE policy (step 2 only).
-
-**Pre–Phase 7 pilots (step 8 not applied):** holds were client-side upserts with a race (I-21) and any authenticated user could UPDATE slots (I-22). Do not run a Phase 7 client against that schema.
-
-### 7a. Security hardening (step 10)
-
-`20260921000000_security_hardening.sql` must be applied **before** shipping a client build that includes the transactional booking changes — the client calls the new RPCs below, and the migration removes patients' direct INSERT/UPDATE on `appointments`, so **older clients can no longer book, reschedule or cancel** once it is applied. Deploy DB + client together.
+Booking writes go through **SECURITY DEFINER RPCs**; patients have no direct INSERT/UPDATE on `appointments`, and clients can't write `clinic_sessions` (see §6a for the session RPCs).
 
 | RPC | Purpose |
 |-----|---------|
-| `book_appointment_from_hold` | Validates hold, slot, doctor availability and beneficiary; inserts the appointment, books the slot, clears the hold — one transaction |
-| `reschedule_appointment` | Moves an appointment to a slot the caller holds (same doctor), books it, frees the old slot — one transaction |
-| `cancel_appointment` | Cancels and frees the slot — one transaction |
+| `cancel_appointment` | Patient, doctor or admin cancels a booking; frees the session place |
+| `delete_my_account` | Patient self-deletion (step 15) |
+| `remove_beneficiary` | Hide a family member (step 19) |
+| `retry_notification_delivery` | Admin re-queues a failed message (step 21) |
 
-Other changes:
+Other rules:
 
-- `appointments_one_active_per_slot` — partial unique index; the migration aborts with instructions if duplicates exist.
-- Doctors may still update their own appointments directly, but only `status` (pending→confirmed/cancelled, confirmed→completed/cancelled), `room`, `video_url` and `notes`. `video_url` must be `https://`.
-- Taking a new slot hold releases the caller's other holds (one active hold per user). Holds are visible only to their owner.
-- Internal SECURITY DEFINER helpers (`enqueue_notification_deliveries`, `log_admin_audit`, trigger functions) are no longer executable by `anon`/`authenticated`.
-- `free_orphan_booked_slot` is restricted to the slot's doctor or an admin.
-- **pg_cron (recommended):** enable it under Database → Extensions, then re-run the migration to schedule the expired-hold sweep.
+- Doctors may update their own appointments directly, but only `status` (pending→confirmed/cancelled, confirmed→completed/cancelled), `room`, `video_url` and `notes`. `video_url` must be `https://`. Nobody can change `session_id` directly.
+- Deactivated accounts (`profiles.is_active = false`) lose all data access, including RPCs, even with a live session (step 11).
+- Internal SECURITY DEFINER helpers (`enqueue_notification_deliveries`, `log_admin_audit`, trigger functions, `session_booking_error`) are not executable by `anon`/`authenticated`.
+- **Admin audit:** `admin_audit_log` (admins read-only) records doctor invite creation/revocation and account deactivation/reactivation; shown in the app under **Activity**.
+
+History: steps 8 and 10 introduced slot-hold RPCs (`hold_slot_if_available`, `book_appointment_from_hold`, …) for the original slot model. Step 22 removed them.
 
 ---
 
 ## 8. Optional seed file
 
-[`supabase/seed_pilot.sql`](../supabase/seed_pilot.sql) contains **commented templates only** (admin note, doctor row, sample slots). It is not run automatically by the app. Uncomment and edit UUIDs/dates when you want copy-paste examples.
+[`supabase/seed_pilot.sql`](../supabase/seed_pilot.sql) contains **commented templates only** (admin note, doctor row, sample clinic sessions, invite). It is not run automatically by the app. Uncomment and edit UUIDs/dates when you want copy-paste examples.
 
 ---
 

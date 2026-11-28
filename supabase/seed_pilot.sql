@@ -49,34 +49,24 @@
 --   is_active = true;
 
 -- -----------------------------------------------------------------
--- 3. Example appointment_slots (future dates required)
+-- 3. Example clinic sessions (future dates; local hospital time)
 -- -----------------------------------------------------------------
--- Replace doctor_id and pick dates/times in the future (local hospital TZ).
+-- Easiest from the app: Schedule → Add clinic sessions. In SQL (as the
+-- database owner, which bypasses the RPC permission checks):
 --
--- insert into public.appointment_slots (
+-- insert into public.clinic_sessions (
 --   doctor_id,
---   slot_date,
+--   session_date,
 --   start_time,
 --   end_time,
---   status
+--   capacity,
+--   room
 -- ) values
---   (
---     '11111111-1111-1111-1111-111111111111',
---     (current_date + interval '1 day')::date,
---     '09:00',
---     '09:30',
---     'available'
---   ),
---   (
---     '11111111-1111-1111-1111-111111111111',
---     (current_date + interval '1 day')::date,
---     '09:30',
---     '10:00',
---     'available'
---   );
+--   ('11111111-1111-1111-1111-111111111111', current_date + 1, '09:00', '13:00', 20, 'Consulting room 1'),
+--   ('11111111-1111-1111-1111-111111111111', current_date + 3, '09:00', '13:00', 20, 'Consulting room 1');
 
 -- -----------------------------------------------------------------
--- 4. Example doctor_invites row (admin creates; Phase 1 adds UI)
+-- 4. Example doctor_invites row (admins normally use Roster → Invite doctor)
 -- -----------------------------------------------------------------
 -- Requires an admin profile id for created_by. Code is uppercase-friendly.
 --
@@ -84,6 +74,7 @@
 --   code,
 --   email,
 --   specialty,
+--   department,
 --   bio,
 --   consultation_fee,
 --   years_experience,
@@ -94,7 +85,8 @@
 --   'PILOT001',
 --   'doctor.example@hospital.test',
 --   'Cardiology',
---   'Invite for pilot claim flow (Phase 1 UI).',
+--   'Cardiology Unit',
+--   'Invite for pilot claim flow.',
 --   75.00,
 --   12,
 --   'pending',

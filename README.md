@@ -14,9 +14,9 @@ Requires Node 22.13+, 24.3+ or 26+ (odd-numbered Node releases are not supported
 - Patients: doctor bios, edit/remove family members, recent updates (messages sent), account deletion
 - Admins: book/cancel/move on a patient's behalf, patient directory, doctor details and department, invite history, activity log, failed-message retry, hospital time zone
 - Doctor agenda/schedule, admin roster, capacity, and appointment views
-- Scheduling schema: `clinic_sessions`, capacity-checked booking RPCs, beneficiaries (legacy slot/hold/blackout tables remain but are unused)
+- Scheduling schema: `clinic_sessions`, capacity-checked booking RPCs, beneficiaries (the original slot/hold/blackout tables were removed in migration 22)
 
-Pilot deployment steps, migration order, and smoke tests live in **[docs/RUNBOOK.md](docs/RUNBOOK.md)**. The phased rollout plan is in **[DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md)**.
+Pilot deployment steps, migration order, and smoke tests live in **[docs/RUNBOOK.md](docs/RUNBOOK.md)**. The original rollout plan, [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md), is kept for history (it predates clinic sessions).
 
 ## Prerequisites
 
@@ -89,7 +89,7 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) §10–11 for hosting, Supabase Auth URLs
 | `lib/supabase.ts` | Supabase client |
 | `supabase/` | Schema, migrations, optional seed |
 
-Product build sequence and decisions: `PLAN.md`.
+Original product build sequence (historical, pre-sessions): `PLAN.md`.
 
 ## Deployment
 

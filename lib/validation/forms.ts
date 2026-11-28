@@ -42,10 +42,6 @@ export function parseTimeOnDate(dateYmd: string, timeHm: string): Date {
   return parseISO(`${dateYmd}T${timeHm}:00`);
 }
 
-export function toIsoDateTimeFromForm(dateYmd: string, timeHm: string): string {
-  return parseTimeOnDate(dateYmd, timeHm).toISOString();
-}
-
 export const clinicSessionFormSchema = z
   .object({
     firstDate: scheduleDateSchema,

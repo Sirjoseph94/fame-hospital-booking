@@ -44,4 +44,3 @@ export const doctorProfileSchema = z.object({
     .pipe(z.number().min(0, "Cannot be negative.")),
 });
 
-export type DoctorProfileFormFields = z.infer<typeof doctorProfileSchema>;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AccessibilityInfo,
   Pressable,
@@ -31,7 +31,6 @@ import { useDoctors } from "@/lib/queries/doctors";
 import { queryKeys } from "@/lib/query/keys";
 import { useRefreshOnFocus } from "@/lib/query/use-refresh-on-focus";
 import { useSessionStore } from "@/lib/stores/session";
-import { useVisitStatusSnapshot } from "@/lib/stores/visit-status-snapshot";
 import { SchedulingError } from "@/lib/services/scheduling";
 import type { Appointment, Beneficiary } from "@/types/scheduling";
 
@@ -58,7 +57,6 @@ function visitsErrorMessage(cause: unknown): string {
 
 export default function PatientVisitsScreen() {
   const userId = useSessionStore((state) => state.session?.userId);
-  const mergeStatuses = useVisitStatusSnapshot((state) => state.mergeStatuses);
   const [activeTab, setActiveTab] = useState<VisitsTab>("upcoming");
   const appointmentsQuery = usePatientAppointments(userId);
   const beneficiariesQuery = useBeneficiaries(userId);
@@ -82,22 +80,6 @@ export default function PatientVisitsScreen() {
   const appointmentRows = appointmentsQuery.data;
   const beneficiaryRows = beneficiariesQuery.data;
   const doctorRows = doctorsQuery.data;
-
-  // Announce status changes (e.g. a doctor confirmed a visit) whenever fresh
-  // appointment data arrives.
-  useEffect(() => {
-    if (!appointmentRows) {
-      return;
-    }
-    const snapshot: Record<string, Appointment["dbStatus"]> = {};
-    appointmentRows.forEach((row) => {
-      snapshot[row.id] = row.dbStatus;
-    });
-    const announcements = mergeStatuses(snapshot);
-    for (const line of announcements) {
-      AccessibilityInfo.announceForAccessibility(line);
-    }
-  }, [appointmentRows, mergeStatuses]);
 
   const visitQueries = [appointmentsQuery, beneficiariesQuery, doctorsQuery];
   const initialLoading = visitQueries.some(

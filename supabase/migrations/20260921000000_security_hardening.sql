@@ -32,6 +32,14 @@ do $$
 declare
   v_dupes int;
 begin
+  -- appointments.slot_id is dropped by 20261128000600; skip on re-runs.
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'appointments' and column_name = 'slot_id'
+  ) then
+    return;
+  end if;
+
   select count(*) into v_dupes
   from (
     select slot_id
@@ -252,9 +260,20 @@ $$;
 -- -------------------------------------------------------------------------
 -- 6. One active appointment per slot
 -- -------------------------------------------------------------------------
-create unique index if not exists appointments_one_active_per_slot
-  on public.appointments (slot_id)
-  where slot_id is not null and status in ('pending', 'confirmed');
+-- Guarded: appointments.slot_id is dropped by 20261128000600.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'appointments' and column_name = 'slot_id'
+  ) then
+    create unique index if not exists appointments_one_active_per_slot
+      on public.appointments (slot_id)
+      where slot_id is not null and status in ('pending', 'confirmed');
+    create index if not exists appointments_slot_idx on public.appointments (slot_id);
+  end if;
+end;
+$$;
 
 -- -------------------------------------------------------------------------
 -- 5. Appointments: lock down direct writes
@@ -729,7 +748,6 @@ create index if not exists appointments_patient_idx on public.appointments (pati
 create index if not exists appointments_account_holder_idx on public.appointments (account_holder_id);
 create index if not exists appointments_doctor_date_idx on public.appointments (doctor_id, appointment_date);
 create index if not exists appointments_beneficiary_idx on public.appointments (beneficiary_id);
-create index if not exists appointments_slot_idx on public.appointments (slot_id);
 create index if not exists notification_deliveries_recipient_idx
   on public.notification_deliveries (recipient_id);
 create index if not exists slot_holds_held_by_idx on public.slot_holds (held_by);
